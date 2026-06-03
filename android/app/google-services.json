@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "523938747996",
+    "project_id": "faculty-purpose-bb50a",
+    "storage_bucket": "faculty-purpose-bb50a.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:523938747996:android:54be19ee14e13a4479f899",
+        "android_client_info": {
+          "package_name": "com.example.myproject"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDy4X5wISPSqLPvNC3K_3Ijk4NkEYArC-k"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

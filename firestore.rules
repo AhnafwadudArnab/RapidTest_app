@@ -1,0 +1,131 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return signedIn() && request.auth.uid == userId;
+    }
+
+    function isConfiguredAdmin() {
+      return signedIn() && request.auth.token.email == 'admin_cse@rptest.com';
+    }
+
+    function isAdmin() {
+      return signedIn()
+        && (
+          isConfiguredAdmin()
+          || (
+            exists(/databases/$(database)/documents/users/$(request.auth.uid))
+            && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin'
+          )
+        );
+    }
+
+    function validDatasetString(field, maxLength) {
+      return !(field in request.resource.data)
+        || (
+          request.resource.data[field] is string
+          && request.resource.data[field].size() <= maxLength
+        );
+    }
+
+    function validDatasetCreate(recordDocId) {
+      return request.resource.data.keys().hasOnly([
+          'recordId',
+          'userId',
+          'userName',
+          'userEmail',
+          'qrCodeValue',
+          'kitId',
+          'testType',
+          'selectedResult',
+          'imageUrl',
+          'imageName',
+          'imageStoragePath',
+          'reviewStatus',
+          'adminComment',
+          'reviewedBy',
+          'reviewedAt',
+          'qrParsedData',
+          'submittedAt',
+          'createdAt',
+          'updatedAt'
+        ])
+        && request.resource.data.keys().hasAll([
+          'recordId',
+          'userId',
+          'testType',
+          'selectedResult',
+          'reviewStatus',
+          'submittedAt',
+          'createdAt',
+          'updatedAt'
+        ])
+        && request.resource.data.recordId == recordDocId
+        && request.resource.data.userId == request.auth.uid
+        && request.resource.data.userId is string
+        && request.resource.data.selectedResult in ['Positive', 'Negative', 'Clear']
+        && request.resource.data.reviewStatus == 'Approved'
+        && request.resource.data.submittedAt is timestamp
+        && request.resource.data.createdAt is timestamp
+        && request.resource.data.updatedAt is timestamp
+        && (!('reviewedAt' in request.resource.data) || request.resource.data.reviewedAt is timestamp)
+        && (!('qrParsedData' in request.resource.data) || request.resource.data.qrParsedData is map)
+        && validDatasetString('recordId', 80)
+        && validDatasetString('userName', 120)
+        && validDatasetString('userEmail', 180)
+        && validDatasetString('qrCodeValue', 2000)
+        && validDatasetString('kitId', 160)
+        && validDatasetString('testType', 160)
+        && validDatasetString('imageUrl', 1200)
+        && validDatasetString('imageName', 260)
+        && validDatasetString('imageStoragePath', 500)
+        && validDatasetString('adminComment', 500)
+        && validDatasetString('reviewedBy', 80);
+    }
+
+    function validAdminReviewUpdate() {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'reviewStatus',
+          'adminComment',
+          'reviewedBy',
+          'reviewedAt',
+          'updatedAt'
+        ])
+        && request.resource.data.userId == resource.data.userId
+        && request.resource.data.selectedResult == resource.data.selectedResult
+        && request.resource.data.reviewStatus in ['Pending', 'Approved', 'Rejected']
+        && request.resource.data.updatedAt is timestamp
+        && (!('reviewedAt' in request.resource.data) || request.resource.data.reviewedAt is timestamp)
+        && validDatasetString('adminComment', 500)
+        && validDatasetString('reviewedBy', 80);
+    }
+
+    match /users/{userId} {
+      allow create: if isOwner(userId)
+        && (!('role' in request.resource.data) || request.resource.data.role == 'user');
+      allow create: if isOwner(userId)
+        && isConfiguredAdmin()
+        && request.resource.data.role == 'admin';
+      allow read: if isOwner(userId) || isAdmin();
+      allow update: if isOwner(userId)
+        && resource.data.role == request.resource.data.role
+        && request.resource.data.role != 'admin';
+      allow update: if isOwner(userId)
+        && isConfiguredAdmin()
+        && request.resource.data.role == 'admin';
+      allow update, delete: if isAdmin();
+    }
+
+    match /dataset_records/{recordDocId} {
+      allow create: if signedIn() && validDatasetCreate(recordDocId);
+      allow read: if isAdmin() || isOwner(resource.data.userId);
+      allow update: if isAdmin() && validAdminReviewUpdate();
+      allow delete: if isAdmin();
+    }
+  }
+}
