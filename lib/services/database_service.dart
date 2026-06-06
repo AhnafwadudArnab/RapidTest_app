@@ -50,28 +50,29 @@ class DatabaseService {
             : fallbackTestType;
     var imageStoragePath = '';
     var imageUrl = '';
+    var imageUploadError = '';
 
-    if ((imageFile != null || imageBytes != null) &&
-        imageName != null &&
-        imageName.isNotEmpty) {
+    if (imageFile != null || imageBytes != null) {
+      final safeImageName = _safeImageName(imageName, doc.id);
       imageStoragePath =
-          'rapid_test_reports/${user.uid}/${doc.id}_${DateTime.now().millisecondsSinceEpoch}_$imageName';
+          'rapid_test_reports/${user.uid}/${doc.id}_${DateTime.now().millisecondsSinceEpoch}_$safeImageName';
       try {
         final ref = _storage.ref(imageStoragePath);
+        final metadata = SettableMetadata(
+          contentType: _contentTypeFor(safeImageName),
+        );
         final uploadTask =
             imageBytes != null
-                ? await ref.putData(
-                  imageBytes,
-                  SettableMetadata(contentType: _contentTypeFor(imageName)),
-                )
-                : await ref.putFile(imageFile!);
+                ? await ref.putData(imageBytes, metadata)
+                : await ref.putFile(imageFile!, metadata);
         imageUrl = await uploadTask.ref.getDownloadURL();
       } on FirebaseException catch (e) {
-        throw StateError(
-          e.code == 'permission-denied'
-              ? 'Kit photo upload permission denied. Check Firebase Storage rules for rapid_test_reports.'
-              : 'Kit photo upload failed: ${e.message ?? e.code}',
-        );
+        imageUploadError =
+            e.code == 'permission-denied'
+                ? 'Kit photo upload permission denied.'
+                : 'Kit photo upload failed: ${e.message ?? e.code}';
+        imageStoragePath = '';
+        imageUrl = '';
       }
     }
 
@@ -88,7 +89,7 @@ class DatabaseService {
       'imageName': imageName ?? '',
       'imageStoragePath': imageStoragePath,
       'reviewStatus': 'Approved',
-      'adminComment': '',
+      'adminComment': imageUploadError,
       'reviewedBy': 'Auto Approval',
       'reviewedAt': now,
       'qrParsedData': qrData?.extraData ?? {},
@@ -104,6 +105,14 @@ class DatabaseService {
     if (lowerName.endsWith('.webp')) return 'image/webp';
     if (lowerName.endsWith('.gif')) return 'image/gif';
     return 'image/jpeg';
+  }
+
+  String _safeImageName(String? imageName, String docId) {
+    final trimmed = imageName?.trim();
+    final fallback = 'kit_photo_$docId.jpg';
+    final value = trimmed == null || trimmed.isEmpty ? fallback : trimmed;
+    final sanitized = value.replaceAll(RegExp(r'[^A-Za-z0-9._-]'), '_');
+    return sanitized.isEmpty ? fallback : sanitized;
   }
 
   Stream<QuerySnapshot<Map<String, dynamic>>> watchRecords() {

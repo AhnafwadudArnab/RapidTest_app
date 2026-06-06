@@ -5,6 +5,7 @@ import 'package:get/get.dart';
 import 'package:myproject/OnBoard/frontpage.dart';
 
 import 'RTpage.dart';
+import 'Profilepage.dart';
 import 'qr_result_submission_page.dart';
 
 class Testsfiles extends StatefulWidget {
@@ -101,6 +102,21 @@ class _TestsfilesState extends State<Testsfiles>
                 Navigator.pushReplacement(
                   context,
                   MaterialPageRoute(builder: (context) => const Testsfiles()),
+                );
+              },
+              tileColor: Colors.grey[200],
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(10),
+              ),
+            ),
+            const SizedBox(height: 10),
+            ListTile(
+              leading: const Icon(Icons.person),
+              title: const Text('Profile'),
+              onTap: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (context) => const ProfileDash()),
                 );
               },
               tileColor: Colors.grey[200],

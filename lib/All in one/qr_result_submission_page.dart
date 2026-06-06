@@ -106,6 +106,8 @@ class _QrResultSubmissionPageState extends State<QrResultSubmissionPage> {
               ? 'Permission denied. Check Firestore rules for dataset_records create permission.'
               : 'Could not save result: ${e.message ?? e.code}';
       _showSnackBar(message);
+    } on StateError catch (e) {
+      _showSnackBar(e.message);
     } catch (e) {
       _showSnackBar('Could not save result: $e');
     } finally {
@@ -136,8 +138,8 @@ class _QrResultSubmissionPageState extends State<QrResultSubmissionPage> {
     try {
       final pickedFile = await _imagePicker.pickImage(
         source: source,
-        imageQuality: 100,
-        maxWidth: 3200,
+        imageQuality: 75,
+        maxWidth: 1600,
         preferredCameraDevice: CameraDevice.rear,
       );
       if (pickedFile == null) return;
@@ -414,7 +416,6 @@ class _QrResultSubmissionPageState extends State<QrResultSubmissionPage> {
     if (qrData != null) {
       final kitName =
           qrData.testType.isEmpty ? 'Kit name not found' : qrData.testType;
-      final rawQrValue = qrData.rawValue.trim();
       return TweenAnimationBuilder<double>(
         tween: Tween(begin: 0, end: 1),
         duration: const Duration(milliseconds: 420),
@@ -455,7 +456,6 @@ class _QrResultSubmissionPageState extends State<QrResultSubmissionPage> {
               const SizedBox(height: 10),
               _InfoLine(label: 'Kit Name', value: kitName),
               _InfoLine(label: 'Kit ID', value: qrData.kitId),
-              _InfoLine(label: 'QR Data', value: rawQrValue),
               const SizedBox(height: 10),
               Align(
                 alignment: Alignment.centerRight,

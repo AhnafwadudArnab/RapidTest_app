@@ -34,29 +34,219 @@ class _ProfileDashState extends State<ProfileDash> {
 
   Future<void> fetchUserProfile() async {
     final user = FirebaseAuth.instance.currentUser;
-    if (user != null) {
-      final doc =
-          await FirebaseFirestore.instance
-              .collection('users')
-              .doc(user.uid)
-              .get();
-      if (doc.exists) {
-        setState(() {
-          userData = doc.data();
-          isLoading = false;
-        });
-      } else {
-        setState(() {
-          userData = null;
-          isLoading = false;
-        });
-      }
-    } else {
+    if (user == null) {
       setState(() {
         userData = null;
         isLoading = false;
       });
+      return;
     }
+
+    final fallbackProfile = _fallbackProfileFor(user);
+    var profile = fallbackProfile;
+
+    try {
+      final docRef = FirebaseFirestore.instance
+          .collection('users')
+          .doc(user.uid);
+      final doc = await docRef.get();
+      profile = {...fallbackProfile, if (doc.exists) ...?doc.data()};
+
+      if (!doc.exists) {
+        await docRef.set({
+          ...fallbackProfile,
+          'createdAt': FieldValue.serverTimestamp(),
+          'updatedAt': FieldValue.serverTimestamp(),
+        }, SetOptions(merge: true));
+      }
+    } catch (_) {
+      profile = fallbackProfile;
+    }
+
+    if (!mounted) return;
+    setState(() {
+      userData = profile;
+      isLoading = false;
+    });
+  }
+
+  Map<String, dynamic> _fallbackProfileFor(User user) {
+    final email = user.email ?? '';
+    final displayName =
+        user.displayName?.trim().isNotEmpty == true
+            ? user.displayName!.trim()
+            : email.split('@').first;
+
+    return {
+      'name': displayName,
+      'email': email,
+      'phone': 'Not provided',
+      'bloodGroup': 'Not provided',
+      'bio': 'Not provided',
+      'address': 'Not provided',
+      'role': 'user',
+    };
+  }
+
+  String _profileValue(String key) {
+    final value = userData?[key];
+    if (value == null) return '';
+    final text = value.toString();
+    return text == 'Not provided' ? '' : text;
+  }
+
+  Future<void> _openEditProfileDialog() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+
+    final formKey = GlobalKey<FormState>();
+    final nameController = TextEditingController(text: _profileValue('name'));
+    final phoneController = TextEditingController(text: _profileValue('phone'));
+    final bloodGroupController = TextEditingController(
+      text: _profileValue('bloodGroup'),
+    );
+    final bioController = TextEditingController(text: _profileValue('bio'));
+    final addressController = TextEditingController(
+      text: _profileValue('address'),
+    );
+
+    final saved = await showDialog<bool>(
+      context: context,
+      builder:
+          (dialogContext) => AlertDialog(
+            title: const Text('Edit Profile'),
+            content: SingleChildScrollView(
+              child: Form(
+                key: formKey,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    TextFormField(
+                      controller: nameController,
+                      decoration: const InputDecoration(labelText: 'Name'),
+                      validator:
+                          (value) =>
+                              value == null || value.trim().isEmpty
+                                  ? 'Please enter your name'
+                                  : null,
+                    ),
+                    TextFormField(
+                      controller: phoneController,
+                      decoration: const InputDecoration(
+                        labelText: 'Phone Number',
+                      ),
+                      keyboardType: TextInputType.phone,
+                    ),
+                    TextFormField(
+                      controller: bloodGroupController,
+                      decoration: const InputDecoration(
+                        labelText: 'Blood Group',
+                      ),
+                    ),
+                    TextFormField(
+                      controller: bioController,
+                      decoration: const InputDecoration(labelText: 'Bio'),
+                      minLines: 2,
+                      maxLines: 3,
+                    ),
+                    TextFormField(
+                      controller: addressController,
+                      decoration: const InputDecoration(labelText: 'Address'),
+                      minLines: 2,
+                      maxLines: 3,
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(dialogContext, false),
+                child: const Text('Cancel'),
+              ),
+              ElevatedButton(
+                onPressed: () async {
+                  if (!formKey.currentState!.validate()) return;
+
+                  final profile = {
+                    'name': nameController.text.trim(),
+                    'email': user.email ?? userData?['email'] ?? '',
+                    'phone': phoneController.text.trim(),
+                    'bloodGroup': bloodGroupController.text.trim(),
+                    'bio': bioController.text.trim(),
+                    'address': addressController.text.trim(),
+                    'role': userData?['role'] ?? 'user',
+                    'updatedAt': FieldValue.serverTimestamp(),
+                  };
+
+                  try {
+                    await FirebaseFirestore.instance
+                        .collection('users')
+                        .doc(user.uid)
+                        .set(profile, SetOptions(merge: true));
+
+                    try {
+                      await user.updateDisplayName(profile['name']);
+                    } catch (_) {
+                      // Firestore profile is the source of truth for this page.
+                    }
+
+                    if (!mounted) return;
+                    setState(() {
+                      userData = {
+                        ...?userData,
+                        ...profile,
+                        'phone':
+                            profile['phone']!.isEmpty
+                                ? 'Not provided'
+                                : profile['phone'],
+                        'bloodGroup':
+                            profile['bloodGroup']!.isEmpty
+                                ? 'Not provided'
+                                : profile['bloodGroup'],
+                        'bio':
+                            profile['bio']!.isEmpty
+                                ? 'Not provided'
+                                : profile['bio'],
+                        'address':
+                            profile['address']!.isEmpty
+                                ? 'Not provided'
+                                : profile['address'],
+                      };
+                    });
+                    Navigator.pop(dialogContext, true);
+                  } catch (_) {
+                    if (!mounted) return;
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('Could not update profile.'),
+                      ),
+                    );
+                  }
+                },
+                child: const Text('Save'),
+              ),
+            ],
+          ),
+    );
+
+    nameController.dispose();
+    phoneController.dispose();
+    bloodGroupController.dispose();
+    bioController.dispose();
+    addressController.dispose();
+
+    if (saved == true && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Profile updated successfully.')),
+      );
+    }
+  }
+
+  @override
+  void dispose() {
+    profileImageController.dispose();
+    super.dispose();
   }
 
   @override
@@ -146,6 +336,7 @@ class _ProfileDashState extends State<ProfileDash> {
                     ),
                   ),
                   SingleChildScrollView(
+                    padding: const EdgeInsets.only(bottom: 88),
                     child: Center(
                       child: Column(
                         mainAxisAlignment: MainAxisAlignment.start,
@@ -323,9 +514,7 @@ class _ProfileDashState extends State<ProfileDash> {
                                     mainAxisAlignment: MainAxisAlignment.center,
                                     children: [
                                       ElevatedButton(
-                                        onPressed: () {
-                                          // TODO: Implement profile editing and update Firestore
-                                        },
+                                        onPressed: _openEditProfileDialog,
                                         child: Icon(Icons.edit),
                                       ),
                                     ],
@@ -491,8 +680,11 @@ class TestHistory extends StatelessWidget {
                                     'Kit ID: ${record.kitId.isEmpty ? 'Not provided' : record.kitId}',
                                   ),
                                   Text('Kit Name: ${record.kitDisplayName}'),
-                                  if (record.imageName.isNotEmpty)
-                                    Text('Photo: ${record.imageName}'),
+                                  if (record.imageUrl.isNotEmpty ||
+                                      record.imageName.isNotEmpty) ...[
+                                    const SizedBox(height: 8),
+                                    _SubmissionPhotoPreview(record: record),
+                                  ],
                                 ],
                               ),
                             ),
@@ -506,6 +698,43 @@ class TestHistory extends StatelessWidget {
             ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+class _SubmissionPhotoPreview extends StatelessWidget {
+  const _SubmissionPhotoPreview({required this.record});
+
+  final DatasetRecordModel record;
+
+  @override
+  Widget build(BuildContext context) {
+    if (record.imageUrl.isEmpty) {
+      return const Row(
+        children: [
+          Icon(Icons.image_outlined, size: 18),
+          SizedBox(width: 6),
+          Text('Photo attached'),
+        ],
+      );
+    }
+
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(8),
+      child: Image.network(
+        record.imageUrl,
+        width: double.infinity,
+        height: 96,
+        fit: BoxFit.cover,
+        errorBuilder:
+            (_, __, ___) => const Row(
+              children: [
+                Icon(Icons.broken_image_outlined, size: 18),
+                SizedBox(width: 6),
+                Text('Photo attached'),
+              ],
+            ),
       ),
     );
   }

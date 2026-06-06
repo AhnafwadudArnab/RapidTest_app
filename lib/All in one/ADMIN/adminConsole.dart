@@ -9,6 +9,8 @@ import '../../models/dataset_record_model.dart';
 import '../../services/database_service.dart';
 import '../../services/export_file_deleter_stub.dart'
     if (dart.library.io) '../../services/export_file_deleter_io.dart';
+import '../../services/export_history_store_stub.dart'
+    if (dart.library.io) '../../services/export_history_store_io.dart';
 import '../../services/export_service.dart';
 import '../../widgets/entry_animation.dart';
 import '../../widgets/empty_state_widget.dart';
@@ -62,6 +64,7 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
   void initState() {
     super.initState();
     _loadInitialRecords();
+    _loadRecentExports();
   }
 
   @override
@@ -183,17 +186,19 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
     try {
       final path = await _exportService.exportRecords(_selectedExportFormat);
       if (!mounted) return;
+      final item = _ExportHistoryItem(
+        path: path,
+        format: _selectedExportFormat,
+        recordCount: _lastLoadedRecords.length,
+        exportedAt: DateTime.now(),
+      );
       setState(() {
-        _recentExports.insert(
-          0,
-          _ExportHistoryItem(
-            path: path,
-            format: _selectedExportFormat,
-            recordCount: _lastLoadedRecords.length,
-            exportedAt: DateTime.now(),
-          ),
-        );
+        _recentExports.insert(0, item);
+        if (_recentExports.length > 20) {
+          _recentExports.removeRange(20, _recentExports.length);
+        }
       });
+      await _saveRecentExports();
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(SnackBar(content: Text('Dataset exported to $path')));
@@ -221,6 +226,22 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
 
   List<DatasetRecordModel> _lastLoadedRecords = [];
 
+  Future<void> _loadRecentExports() async {
+    final exports = await loadExportHistoryMaps();
+    if (!mounted) return;
+    setState(() {
+      _recentExports
+        ..clear()
+        ..addAll(exports.map(_ExportHistoryItem.fromMap));
+    });
+  }
+
+  Future<void> _saveRecentExports() {
+    return saveExportHistoryMaps(
+      _recentExports.map((item) => item.toMap()).toList(),
+    );
+  }
+
   Future<void> _deleteRecentExport(_ExportHistoryItem item) async {
     final shouldDelete = await showDialog<bool>(
       context: context,
@@ -247,6 +268,7 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
     final deleted = await deleteExportFile(item.path);
     if (!mounted) return;
     setState(() => _recentExports.remove(item));
+    await _saveRecentExports();
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(
@@ -2021,10 +2043,30 @@ class _ExportHistoryItem {
     required this.exportedAt,
   });
 
+  factory _ExportHistoryItem.fromMap(Map<String, dynamic> data) {
+    return _ExportHistoryItem(
+      path: data['path']?.toString() ?? '',
+      format: data['format']?.toString() ?? 'csv',
+      recordCount: int.tryParse(data['recordCount']?.toString() ?? '') ?? 0,
+      exportedAt:
+          DateTime.tryParse(data['exportedAt']?.toString() ?? '') ??
+          DateTime.fromMillisecondsSinceEpoch(0),
+    );
+  }
+
   final String path;
   final String format;
   final int recordCount;
   final DateTime exportedAt;
+
+  Map<String, dynamic> toMap() {
+    return {
+      'path': path,
+      'format': format,
+      'recordCount': recordCount,
+      'exportedAt': exportedAt.toIso8601String(),
+    };
+  }
 
   String get fileName {
     final normalized = path.replaceAll('\\', '/');
