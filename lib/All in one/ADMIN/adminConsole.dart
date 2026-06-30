@@ -3,7 +3,10 @@ import 'dart:math' as math;
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:get/get.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:mobile_scanner/mobile_scanner.dart';
 
 import '../../models/dataset_record_model.dart';
 import '../../services/database_service.dart';
@@ -37,6 +40,7 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
   final DatabaseService _databaseService = DatabaseService();
   final ExportService _exportService = ExportService();
   final TextEditingController _searchController = TextEditingController();
+  final ScrollController _adminScrollController = ScrollController();
 
   int _selectedPageIndex = 0;
   String _selectedRecordFilter = 'All';
@@ -56,8 +60,10 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
 
   static const _pages = [
     _AdminPage('Dashboard', 'Admin', Icons.dashboard_rounded),
-    _AdminPage('All Records', 'All Records', Icons.apps_rounded),
-    _AdminPage('Dataset Export', 'Dataset Export', Icons.file_download_rounded),
+    _AdminPage('Kits', 'Data Entry', Icons.inventory_2_rounded),
+    _AdminPage('Scans', 'Scans', Icons.qr_code_scanner_rounded),
+    _AdminPage('Reports', 'Reports', Icons.bar_chart_rounded),
+    _AdminPage('Profile', 'Profile', Icons.person_outline_rounded),
   ];
 
   @override
@@ -69,6 +75,7 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
 
   @override
   void dispose() {
+    _adminScrollController.dispose();
     _searchController.dispose();
     super.dispose();
   }
@@ -219,6 +226,10 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
       _selectedRecordFilter = 'All';
       _searchController.clear();
     });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!_adminScrollController.hasClients) return;
+      _adminScrollController.jumpTo(0);
+    });
     if (shouldReloadRecords) {
       _loadInitialRecords();
     }
@@ -284,14 +295,10 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: _AdminColors.page,
-      drawer: _AdminDrawer(
+      bottomNavigationBar: _AdminBottomNav(
         pages: _pages,
         selectedIndex: _selectedPageIndex,
-        onSelected: (index) {
-          Navigator.pop(context);
-          _selectPage(index);
-        },
-        onLogout: _logout,
+        onSelected: _selectPage,
       ),
       body:
           _isLoadingRecords
@@ -302,55 +309,41 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
               )
               : LayoutBuilder(
                 builder: (context, constraints) {
-                  final showSidebar = constraints.maxWidth >= 980;
                   final records = List<DatasetRecordModel>.of(_loadedRecords)
                     ..sort(_newestFirst);
                   _lastLoadedRecords = records;
 
                   return SafeArea(
-                    child: Row(
-                      children: [
-                        if (showSidebar)
-                          _Sidebar(
-                            pages: _pages,
-                            selectedIndex: _selectedPageIndex,
-                            onSelected: _selectPage,
-                            onLogout: _logout,
-                          ),
-                        Expanded(
-                          child: _AdminSurface(
-                            page: _pages[_selectedPageIndex],
-                            pageIndex: _selectedPageIndex,
-                            records: _filterRecords(records),
-                            allRecords: records,
-                            totalRecordCount:
-                                _totalRecordCount ?? records.length,
-                            selectedDateRange: _selectedDateRange,
-                            hasMoreRecords: _hasMoreRecords,
-                            isLoadingMoreRecords: _isLoadingMoreRecords,
-                            onLoadMoreRecords: _loadMoreRecords,
-                            onDateRangePressed: _pickDateRange,
-                            onClearDateRange: _clearDateRange,
-                            selectedRecordFilter: _selectedRecordFilter,
-                            selectedExportFormat: _selectedExportFormat,
-                            isExporting: _isExporting,
-                            searchController: _searchController,
-                            onSearchChanged: (_) => setState(() {}),
-                            onFilterChanged: (filter) {
-                              setState(() => _selectedRecordFilter = filter);
-                              _loadInitialRecords();
-                            },
-                            onFormatChanged:
-                                (format) => setState(
-                                  () => _selectedExportFormat = format,
-                                ),
-                            onExport: _export,
-                            recentExports: _recentExports,
-                            onDeleteRecentExport: _deleteRecentExport,
-                            onPageSelected: _selectPage,
-                          ),
-                        ),
-                      ],
+                    child: _AdminSurface(
+                      page: _pages[_selectedPageIndex],
+                      pageIndex: _selectedPageIndex,
+                      scrollController: _adminScrollController,
+                      records: _filterRecords(records),
+                      allRecords: records,
+                      totalRecordCount: _totalRecordCount ?? records.length,
+                      selectedDateRange: _selectedDateRange,
+                      hasMoreRecords: _hasMoreRecords,
+                      isLoadingMoreRecords: _isLoadingMoreRecords,
+                      onLoadMoreRecords: _loadMoreRecords,
+                      onDateRangePressed: _pickDateRange,
+                      onClearDateRange: _clearDateRange,
+                      selectedRecordFilter: _selectedRecordFilter,
+                      selectedExportFormat: _selectedExportFormat,
+                      isExporting: _isExporting,
+                      searchController: _searchController,
+                      onSearchChanged: (_) => setState(() {}),
+                      onFilterChanged: (filter) {
+                        setState(() => _selectedRecordFilter = filter);
+                        _loadInitialRecords();
+                      },
+                      onFormatChanged:
+                          (format) =>
+                              setState(() => _selectedExportFormat = format),
+                      onExport: _export,
+                      recentExports: _recentExports,
+                      onDeleteRecentExport: _deleteRecentExport,
+                      onPageSelected: _selectPage,
+                      onLogout: _logout,
                     ),
                   );
                 },
@@ -396,6 +389,7 @@ class _AdminSurface extends StatelessWidget {
   const _AdminSurface({
     required this.page,
     required this.pageIndex,
+    required this.scrollController,
     required this.records,
     required this.allRecords,
     required this.totalRecordCount,
@@ -416,10 +410,12 @@ class _AdminSurface extends StatelessWidget {
     required this.recentExports,
     required this.onDeleteRecentExport,
     required this.onPageSelected,
+    required this.onLogout,
   });
 
   final _AdminPage page;
   final int pageIndex;
+  final ScrollController scrollController;
   final List<DatasetRecordModel> records;
   final List<DatasetRecordModel> allRecords;
   final int totalRecordCount;
@@ -440,6 +436,7 @@ class _AdminSurface extends StatelessWidget {
   final List<_ExportHistoryItem> recentExports;
   final ValueChanged<_ExportHistoryItem> onDeleteRecentExport;
   final ValueChanged<int> onPageSelected;
+  final VoidCallback onLogout;
 
   @override
   Widget build(BuildContext context) {
@@ -457,6 +454,8 @@ class _AdminSurface extends StatelessWidget {
                         ? 14.0
                         : 24.0;
                 return ListView(
+                  controller: scrollController,
+                  key: ValueKey(pageIndex),
                   padding: EdgeInsets.fromLTRB(
                     horizontalPadding,
                     constraints.maxWidth <= 520 ? 14 : 22,
@@ -472,7 +471,8 @@ class _AdminSurface extends StatelessWidget {
                         onDateRangePressed: onDateRangePressed,
                         onClearDateRange: onClearDateRange,
                       ),
-                      1 => _AllRecordsPage(
+                      1 => const _QrKitsPage(),
+                      2 => _AllRecordsPage(
                         records: records,
                         allRecords: allRecords,
                         totalRecordCount: totalRecordCount,
@@ -487,7 +487,7 @@ class _AdminSurface extends StatelessWidget {
                         onSearchChanged: onSearchChanged,
                         onFilterChanged: onFilterChanged,
                       ),
-                      _ => _DatasetExportPage(
+                      3 => _DatasetExportPage(
                         records: records,
                         allRecords: allRecords,
                         selectedFormat: selectedExportFormat,
@@ -497,6 +497,7 @@ class _AdminSurface extends StatelessWidget {
                         recentExports: recentExports,
                         onDeleteRecentExport: onDeleteRecentExport,
                       ),
+                      _ => _AdminProfilePage(onLogout: onLogout),
                     },
                   ],
                 );
@@ -626,7 +627,7 @@ class _DashboardHome extends StatelessWidget {
         const SizedBox(height: 22),
         _RecentSubmissions(
           records: records.take(4).toList(),
-          onViewAll: () => onPageTap?.call(1),
+          onViewAll: () => onPageTap?.call(2),
         ),
         const SizedBox(height: 22),
         _QuickActions(onTap: onPageTap),
@@ -901,6 +902,936 @@ class _DatasetExportPage extends StatelessWidget {
   }
 }
 
+class _AdminProfilePage extends StatelessWidget {
+  const _AdminProfilePage({required this.onLogout});
+
+  final VoidCallback onLogout;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _Panel(
+          title: 'Admin Profile',
+          subtitle: 'Manage the current admin session.',
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
+                children: [
+                  const CircleAvatar(
+                    radius: 34,
+                    backgroundColor: Color(0xFFE7F1FF),
+                    child: Icon(
+                      Icons.person_rounded,
+                      color: _AdminColors.navy,
+                      size: 34,
+                    ),
+                  ),
+                  const SizedBox(width: 16),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: const [
+                        Text(
+                          'Rapid Test Admin',
+                          style: TextStyle(
+                            color: _AdminColors.navy,
+                            fontSize: 20,
+                            fontWeight: FontWeight.w900,
+                          ),
+                        ),
+                        SizedBox(height: 5),
+                        Text(
+                          'Administrator access',
+                          style: TextStyle(color: _AdminColors.muted),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 22),
+              FilledButton.icon(
+                onPressed: onLogout,
+                icon: const Icon(Icons.logout_rounded),
+                label: const Text('Logout'),
+                style: FilledButton.styleFrom(
+                  minimumSize: const Size.fromHeight(54),
+                  backgroundColor: _AdminColors.red,
+                  foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _QrKitsPage extends StatefulWidget {
+  const _QrKitsPage();
+
+  @override
+  State<_QrKitsPage> createState() => _QrKitsPageState();
+}
+
+class _QrKitsPageState extends State<_QrKitsPage> {
+  final DatabaseService _databaseService = DatabaseService();
+  final TextEditingController _qrCodeController = TextEditingController();
+  final TextEditingController _kitNameController = TextEditingController();
+  final TextEditingController _categoryController = TextEditingController();
+  final TextEditingController _sampleTypeController = TextEditingController();
+  final TextEditingController _manufacturerController = TextEditingController();
+  final TextEditingController _descriptionController = TextEditingController();
+  final ImagePicker _imagePicker = ImagePicker();
+  final MobileScannerController _qrImageScannerController =
+      MobileScannerController(
+        autoStart: false,
+        formats: const [BarcodeFormat.qrCode],
+      );
+  String? _editingQrCode;
+  Uint8List? _selectedQrImageBytes;
+  String? _selectedQrImageName;
+  String? _savedQrImageUrl;
+  bool _isSaving = false;
+  bool _isReadingQr = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _seedDefaultsSilently();
+  }
+
+  @override
+  void dispose() {
+    _qrImageScannerController.dispose();
+    _qrCodeController.dispose();
+    _kitNameController.dispose();
+    _categoryController.dispose();
+    _sampleTypeController.dispose();
+    _manufacturerController.dispose();
+    _descriptionController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _seedDefaultsSilently() async {
+    try {
+      await _databaseService.seedDefaultQrKits();
+    } catch (_) {
+      // The visible button reports errors if the admin wants to retry.
+    }
+  }
+
+  Future<void> _saveKit() async {
+    final qrCode = _qrCodeController.text.trim();
+    final kitName = _kitNameController.text.trim();
+    if (qrCode.isEmpty || kitName.isEmpty) {
+      _showMessage('Enter both QR code and kit name.');
+      return;
+    }
+
+    setState(() => _isSaving = true);
+    try {
+      await _databaseService.saveQrKit(
+        qrCode: qrCode,
+        kitName: kitName,
+        category: _categoryController.text,
+        sampleType: _sampleTypeController.text,
+        manufacturer: _manufacturerController.text,
+        description: _descriptionController.text,
+        qrImageBytes: _selectedQrImageBytes,
+        qrImageName: _selectedQrImageName,
+      );
+      final editingQrCode = _editingQrCode;
+      if (editingQrCode != null &&
+          DatabaseService.normalizeQrKitCode(editingQrCode) !=
+              DatabaseService.normalizeQrKitCode(qrCode)) {
+        await _databaseService.deleteQrKit(editingQrCode);
+      }
+      if (!mounted) return;
+      _clearEditingForm();
+      _showMessage(
+        editingQrCode == null ? 'QR kit uploaded.' : 'QR kit updated.',
+      );
+    } catch (e) {
+      if (mounted) _showMessage('Could not save QR kit: $e');
+    } finally {
+      if (mounted) setState(() => _isSaving = false);
+    }
+  }
+
+  Future<void> _pickQrImage(ImageSource source) async {
+    setState(() => _isReadingQr = true);
+    try {
+      final pickedFile = await _imagePicker.pickImage(
+        source: source,
+        imageQuality: 85,
+        maxWidth: 1600,
+        preferredCameraDevice: CameraDevice.rear,
+      );
+      if (pickedFile == null) return;
+
+      final capture = await _qrImageScannerController.analyzeImage(
+        pickedFile.path,
+      );
+      final qrValue = capture?.barcodes
+          .map((barcode) => barcode.rawValue)
+          .whereType<String>()
+          .map((value) => value.trim())
+          .firstWhere((value) => value.isNotEmpty, orElse: () => '');
+
+      if (!mounted) return;
+      if (qrValue == null || qrValue.isEmpty) {
+        _showMessage('No QR code found in this photo.');
+        return;
+      }
+
+      _qrCodeController.text = DatabaseService.normalizeQrKitCode(qrValue);
+      _selectedQrImageBytes = await pickedFile.readAsBytes();
+      _selectedQrImageName = pickedFile.name;
+      _savedQrImageUrl = null;
+      _showMessage('QR code filled from photo.');
+    } on PlatformException {
+      final message =
+          source == ImageSource.camera
+              ? 'Camera could not be opened. Please allow camera permission.'
+              : 'Photo picker could not be opened. Please allow photo access.';
+      if (mounted) _showMessage(message);
+    } catch (e) {
+      if (mounted) _showMessage('Could not read QR from photo: $e');
+    } finally {
+      if (mounted) setState(() => _isReadingQr = false);
+    }
+  }
+
+  Future<void> _seedDefaults() async {
+    setState(() => _isSaving = true);
+    try {
+      await _databaseService.seedDefaultQrKits();
+      if (mounted) _showMessage('Default QR kits added.');
+    } catch (e) {
+      if (mounted) _showMessage('Could not add default kits: $e');
+    } finally {
+      if (mounted) setState(() => _isSaving = false);
+    }
+  }
+
+  Future<void> _deleteKit(QrKitRecord kit) async {
+    final shouldDelete = await showDialog<bool>(
+      context: context,
+      builder:
+          (context) => AlertDialog(
+            title: const Text('Delete QR kit?'),
+            content: Text(
+              '${kit.qrCode} will no longer resolve to a kit name.',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: const Text('Cancel'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.pop(context, true),
+                child: const Text('Delete'),
+              ),
+            ],
+          ),
+    );
+    if (shouldDelete != true) return;
+
+    try {
+      await _databaseService.deleteQrKit(kit.qrCode);
+      if (mounted) _showMessage('QR kit deleted.');
+    } catch (e) {
+      if (mounted) _showMessage('Could not delete QR kit: $e');
+    }
+  }
+
+  void _editKit(QrKitRecord kit) {
+    setState(() => _editingQrCode = kit.qrCode);
+    _qrCodeController.text = kit.qrCode;
+    _kitNameController.text = kit.kitName;
+    _categoryController.text = kit.category;
+    _sampleTypeController.text = kit.sampleType;
+    _manufacturerController.text = kit.manufacturer;
+    _descriptionController.text = kit.description;
+    _selectedQrImageBytes = null;
+    _selectedQrImageName = kit.qrImageName;
+    _savedQrImageUrl = kit.qrImageUrl;
+  }
+
+  void _clearEditingForm() {
+    setState(() => _editingQrCode = null);
+    _qrCodeController.clear();
+    _kitNameController.clear();
+    _categoryController.clear();
+    _sampleTypeController.clear();
+    _manufacturerController.clear();
+    _descriptionController.clear();
+    _selectedQrImageBytes = null;
+    _selectedQrImageName = null;
+    _savedQrImageUrl = null;
+  }
+
+  void _showMessage(String message) {
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isEditing = _editingQrCode != null;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const _QrUploadInfo(),
+        const SizedBox(height: 18),
+        _QrUploadDropZone(
+          isReading: _isReadingQr,
+          imageName: _selectedQrImageName,
+          imageUrl: _savedQrImageUrl,
+          onChooseImage: () => _pickQrImage(ImageSource.gallery),
+          onCamera: () => _pickQrImage(ImageSource.camera),
+        ),
+        const SizedBox(height: 26),
+        Row(
+          children: [
+            const Expanded(
+              child: Text(
+                'Kit Information',
+                style: TextStyle(
+                  color: _AdminColors.navy,
+                  fontSize: 20,
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+            ),
+            if (isEditing)
+              TextButton.icon(
+                onPressed: _isSaving ? null : _clearEditingForm,
+                icon: const Icon(Icons.close_rounded),
+                label: const Text('Cancel edit'),
+              ),
+          ],
+        ),
+        const SizedBox(height: 18),
+        _QrLabeledField(
+          label: 'Kit Name',
+          required: true,
+          controller: _kitNameController,
+          hintText: 'Enter kit name',
+          icon: Icons.assignment_outlined,
+        ),
+        const SizedBox(height: 16),
+        _QrLabeledField(
+          label: 'QR Code',
+          required: true,
+          controller: _qrCodeController,
+          hintText: 'Enter QR code',
+          icon: Icons.qr_code_2_rounded,
+          textCapitalization: TextCapitalization.characters,
+        ),
+        const SizedBox(height: 16),
+        _QrLabeledField(
+          label: 'Test Category',
+          controller: _categoryController,
+          hintText: 'Example: Infectious disease',
+          icon: Icons.category_outlined,
+        ),
+        const SizedBox(height: 16),
+        _QrLabeledField(
+          label: 'Sample Type',
+          controller: _sampleTypeController,
+          hintText: 'Example: Blood, nasal swab, urine',
+          icon: Icons.science_outlined,
+        ),
+        const SizedBox(height: 16),
+        _QrLabeledField(
+          label: 'Manufacturer',
+          controller: _manufacturerController,
+          hintText: 'Enter manufacturer or supplier',
+          icon: Icons.business_outlined,
+        ),
+        const SizedBox(height: 16),
+        _QrLabeledField(
+          label: 'Description',
+          controller: _descriptionController,
+          hintText: 'Enter description',
+          icon: Icons.notes_rounded,
+          maxLines: 3,
+        ),
+        const SizedBox(height: 20),
+        FilledButton.icon(
+          onPressed: _isSaving ? null : _saveKit,
+          icon:
+              _isSaving
+                  ? const SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                  : const Icon(Icons.cloud_upload_outlined),
+          label: Text(
+            _isSaving
+                ? 'Saving...'
+                : isEditing
+                ? 'Update QR Kit'
+                : 'Upload Kit',
+          ),
+          style: FilledButton.styleFrom(
+            minimumSize: const Size.fromHeight(58),
+            backgroundColor: _AdminColors.blue,
+            foregroundColor: Colors.white,
+            textStyle: const TextStyle(
+              fontSize: 18,
+              fontWeight: FontWeight.w900,
+            ),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(8),
+            ),
+          ),
+        ),
+        const SizedBox(height: 12),
+        Align(
+          alignment: Alignment.centerRight,
+          child: TextButton.icon(
+            onPressed: _isSaving ? null : _seedDefaults,
+            icon: const Icon(Icons.playlist_add_check_rounded),
+            label: const Text('Add default kits'),
+          ),
+        ),
+        const SizedBox(height: 22),
+        _Panel(
+          title: 'Saved QR Kits',
+          child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+            stream: _databaseService.watchQrKits(),
+            builder: (context, snapshot) {
+              if (snapshot.connectionState == ConnectionState.waiting) {
+                return const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 24),
+                  child: Center(child: CircularProgressIndicator()),
+                );
+              }
+              if (snapshot.hasError) {
+                return _QrKitsError(error: snapshot.error.toString());
+              }
+              final kits =
+                  (snapshot.data?.docs ?? [])
+                      .map((doc) => QrKitRecord.fromMap(doc.id, doc.data()))
+                      .whereType<QrKitRecord>()
+                      .toList();
+              if (kits.isEmpty) {
+                return const _InlineEmpty(
+                  message:
+                      'No QR kits saved yet. Add the default kits to start.',
+                );
+              }
+              return LayoutBuilder(
+                builder: (context, constraints) {
+                  final cardWidth =
+                      constraints.maxWidth >= 760
+                          ? (constraints.maxWidth - 14) / 2
+                          : constraints.maxWidth;
+                  return Wrap(
+                    spacing: 14,
+                    runSpacing: 14,
+                    children: [
+                      for (final kit in kits)
+                        SizedBox(
+                          width: cardWidth,
+                          child: _QrKitRow(
+                            kit: kit,
+                            onEdit: _editKit,
+                            onDelete: _deleteKit,
+                          ),
+                        ),
+                    ],
+                  );
+                },
+              );
+            },
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _QrKitRow extends StatelessWidget {
+  const _QrKitRow({
+    required this.kit,
+    required this.onEdit,
+    required this.onDelete,
+  });
+
+  final QrKitRecord kit;
+  final ValueChanged<QrKitRecord> onEdit;
+  final ValueChanged<QrKitRecord> onDelete;
+
+  @override
+  Widget build(BuildContext context) {
+    final compact = MediaQuery.sizeOf(context).width <= 520;
+    final details = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          kit.kitName,
+          style: const TextStyle(
+            color: _AdminColors.navy,
+            fontWeight: FontWeight.w900,
+          ),
+        ),
+        const SizedBox(height: 5),
+        SelectableText(
+          kit.qrCode,
+          style: const TextStyle(color: _AdminColors.muted),
+        ),
+        if (kit.category.isNotEmpty ||
+            kit.sampleType.isNotEmpty ||
+            kit.manufacturer.isNotEmpty) ...[
+          const SizedBox(height: 6),
+          Wrap(
+            spacing: 6,
+            runSpacing: 6,
+            children: [
+              if (kit.category.isNotEmpty)
+                _MiniInfoChip(label: kit.category, icon: Icons.category),
+              if (kit.sampleType.isNotEmpty)
+                _MiniInfoChip(label: kit.sampleType, icon: Icons.science),
+              if (kit.manufacturer.isNotEmpty)
+                _MiniInfoChip(label: kit.manufacturer, icon: Icons.business),
+            ],
+          ),
+        ],
+        if (kit.qrImageName.isNotEmpty || kit.qrImageUrl.isNotEmpty) ...[
+          const SizedBox(height: 4),
+          Text(
+            'Image: ${kit.qrImageName.isNotEmpty ? kit.qrImageName : 'Saved'}',
+            style: const TextStyle(color: _AdminColors.muted, fontSize: 13),
+          ),
+        ],
+      ],
+    );
+    final actions = Wrap(
+      spacing: 4,
+      children: [
+        IconButton(
+          tooltip: 'Edit',
+          onPressed: () => onEdit(kit),
+          icon: const Icon(Icons.edit_rounded),
+        ),
+        IconButton(
+          tooltip: 'Delete',
+          onPressed: () => onDelete(kit),
+          icon: const Icon(Icons.delete_outline_rounded),
+          color: _AdminColors.red,
+        ),
+      ],
+    );
+
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: _AdminColors.purple.withOpacity(0.045),
+        border: Border.all(color: _AdminColors.purple.withOpacity(0.16)),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child:
+          compact
+              ? Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      const _SoftIcon(
+                        icon: Icons.qr_code_2_rounded,
+                        color: _AdminColors.purple,
+                        size: 42,
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(child: details),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  actions,
+                ],
+              )
+              : Row(
+                children: [
+                  const _SoftIcon(
+                    icon: Icons.qr_code_2_rounded,
+                    color: _AdminColors.purple,
+                    size: 48,
+                  ),
+                  const SizedBox(width: 14),
+                  Expanded(child: details),
+                  actions,
+                ],
+              ),
+    );
+  }
+}
+
+class _MiniInfoChip extends StatelessWidget {
+  const _MiniInfoChip({required this.label, required this.icon});
+
+  final String label;
+  final IconData icon;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.72),
+        border: Border.all(color: _AdminColors.border),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 13, color: _AdminColors.muted),
+          const SizedBox(width: 4),
+          Text(
+            label,
+            style: const TextStyle(color: _AdminColors.muted, fontSize: 12),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _QrUploadInfo extends StatelessWidget {
+  const _QrUploadInfo();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.72),
+        border: Border.all(color: _AdminColors.blue.withOpacity(0.24)),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: const Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          CircleAvatar(
+            radius: 18,
+            backgroundColor: _AdminColors.blue,
+            child: Icon(Icons.info_rounded, color: Colors.white, size: 22),
+          ),
+          SizedBox(width: 16),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Admin Data Entry',
+                  style: TextStyle(
+                    color: _AdminColors.navy,
+                    fontWeight: FontWeight.w900,
+                    fontSize: 18,
+                  ),
+                ),
+                SizedBox(height: 8),
+                Text(
+                  'Insert or update test-kit details from the admin panel. The saved QR code and kit information are used when users scan and submit results.',
+                  style: TextStyle(
+                    color: _AdminColors.muted,
+                    fontSize: 16,
+                    height: 1.35,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _QrUploadDropZone extends StatelessWidget {
+  const _QrUploadDropZone({
+    required this.isReading,
+    required this.imageName,
+    required this.imageUrl,
+    required this.onChooseImage,
+    required this.onCamera,
+  });
+
+  final bool isReading;
+  final String? imageName;
+  final String? imageUrl;
+  final VoidCallback onChooseImage;
+  final VoidCallback onCamera;
+
+  @override
+  Widget build(BuildContext context) {
+    final hasImage =
+        (imageName != null && imageName!.trim().isNotEmpty) ||
+        (imageUrl != null && imageUrl!.trim().isNotEmpty);
+    return CustomPaint(
+      painter: _DashedBorderPainter(
+        color: _AdminColors.blue.withOpacity(0.48),
+        radius: 8,
+      ),
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 30),
+        child: Column(
+          children: [
+            CircleAvatar(
+              radius: 46,
+              backgroundColor: _AdminColors.blue.withOpacity(0.1),
+              child: Icon(
+                isReading
+                    ? Icons.manage_search_rounded
+                    : Icons.cloud_upload_outlined,
+                color: _AdminColors.blue,
+                size: 38,
+              ),
+            ),
+            const SizedBox(height: 18),
+            Text(
+              isReading
+                  ? 'Reading QR Code Image'
+                  : hasImage
+                  ? 'QR Code Image Ready'
+                  : 'Upload QR Code Image',
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                color: _AdminColors.navy,
+                fontSize: 20,
+                fontWeight: FontWeight.w900,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              hasImage ? (imageName ?? 'Saved QR image') : 'JPG, PNG (Max 5MB)',
+              textAlign: TextAlign.center,
+              style: const TextStyle(color: _AdminColors.muted, fontSize: 16),
+            ),
+            const SizedBox(height: 22),
+            Wrap(
+              alignment: WrapAlignment.center,
+              spacing: 10,
+              runSpacing: 10,
+              children: [
+                FilledButton.icon(
+                  onPressed: isReading ? null : onChooseImage,
+                  icon: const Icon(Icons.image_outlined),
+                  label: const Text('Choose Image'),
+                  style: FilledButton.styleFrom(
+                    backgroundColor: _AdminColors.blue,
+                    foregroundColor: Colors.white,
+                    minimumSize: const Size(188, 54),
+                    textStyle: const TextStyle(
+                      fontSize: 17,
+                      fontWeight: FontWeight.w900,
+                    ),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                  ),
+                ),
+                OutlinedButton.icon(
+                  onPressed: isReading ? null : onCamera,
+                  icon: const Icon(Icons.photo_camera_rounded),
+                  label: const Text('Camera'),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: _AdminColors.navy,
+                    minimumSize: const Size(128, 54),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _QrLabeledField extends StatelessWidget {
+  const _QrLabeledField({
+    required this.label,
+    required this.controller,
+    required this.hintText,
+    required this.icon,
+    this.required = false,
+    this.textCapitalization = TextCapitalization.none,
+    this.maxLines = 1,
+  });
+
+  final String label;
+  final bool required;
+  final TextEditingController controller;
+  final String hintText;
+  final IconData icon;
+  final TextCapitalization textCapitalization;
+  final int maxLines;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _QrFieldLabel(label: label, required: required),
+        const SizedBox(height: 8),
+        TextField(
+          controller: controller,
+          textCapitalization: textCapitalization,
+          maxLines: maxLines,
+          decoration: _qrInputDecoration(hintText: hintText, icon: icon),
+        ),
+      ],
+    );
+  }
+}
+
+class _QrFieldLabel extends StatelessWidget {
+  const _QrFieldLabel({required this.label, this.required = false});
+
+  final String label;
+  final bool required;
+
+  @override
+  Widget build(BuildContext context) {
+    return RichText(
+      text: TextSpan(
+        text: label,
+        style: const TextStyle(color: _AdminColors.navy, fontSize: 15),
+        children: [
+          if (required)
+            const TextSpan(
+              text: ' *',
+              style: TextStyle(color: _AdminColors.red),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+InputDecoration _qrInputDecoration({
+  required String hintText,
+  required IconData icon,
+}) {
+  final border = OutlineInputBorder(
+    borderRadius: BorderRadius.circular(8),
+    borderSide: const BorderSide(color: Color(0xFFD5DAE4)),
+  );
+  return InputDecoration(
+    hintText: hintText,
+    suffixIcon: Icon(icon, color: const Color(0xFF818A9C)),
+    filled: true,
+    fillColor: Colors.white,
+    contentPadding: const EdgeInsets.symmetric(horizontal: 18, vertical: 18),
+    border: border,
+    enabledBorder: border,
+    disabledBorder: border,
+    focusedBorder: border.copyWith(
+      borderSide: const BorderSide(color: _AdminColors.blue, width: 1.5),
+    ),
+  );
+}
+
+class _DashedBorderPainter extends CustomPainter {
+  _DashedBorderPainter({required this.color, required this.radius});
+
+  final Color color;
+  final double radius;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint =
+        Paint()
+          ..color = color
+          ..strokeWidth = 1.4
+          ..style = PaintingStyle.stroke;
+    final rect = RRect.fromRectAndRadius(
+      Offset.zero & size,
+      Radius.circular(radius),
+    );
+    final path = Path()..addRRect(rect);
+    for (final metric in path.computeMetrics()) {
+      var distance = 0.0;
+      while (distance < metric.length) {
+        final next = math.min(distance + 8, metric.length);
+        canvas.drawPath(metric.extractPath(distance, next), paint);
+        distance += 14;
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _DashedBorderPainter oldDelegate) {
+    return oldDelegate.color != color || oldDelegate.radius != radius;
+  }
+}
+
+class _QrKitsError extends StatelessWidget {
+  const _QrKitsError({required this.error});
+
+  final String error;
+
+  @override
+  Widget build(BuildContext context) {
+    final isPermissionError = error.toLowerCase().contains('permission');
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color:
+            isPermissionError
+                ? _AdminColors.red.withOpacity(0.06)
+                : _AdminColors.orange.withOpacity(0.06),
+        border: Border.all(
+          color:
+              isPermissionError
+                  ? _AdminColors.red.withOpacity(0.18)
+                  : _AdminColors.orange.withOpacity(0.18),
+        ),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(
+            isPermissionError
+                ? Icons.lock_outline_rounded
+                : Icons.error_outline_rounded,
+            color: isPermissionError ? _AdminColors.red : _AdminColors.orange,
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              isPermissionError
+                  ? 'Firestore blocked QR kits. Deploy the updated firestore.rules, then reopen this page.'
+                  : 'Could not load QR kits: $error',
+              style: const TextStyle(color: _AdminColors.navy, height: 1.35),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _TopBar extends StatelessWidget {
   const _TopBar({required this.page});
 
@@ -910,124 +1841,95 @@ class _TopBar extends StatelessWidget {
   Widget build(BuildContext context) {
     final compact = MediaQuery.sizeOf(context).width <= 520;
     return Container(
-      height: compact ? 68 : 88,
-      padding: EdgeInsets.symmetric(horizontal: compact ? 6 : 12),
+      height: compact ? 86 : 104,
+      padding: EdgeInsets.symmetric(horizontal: compact ? 12 : 22),
       decoration: const BoxDecoration(
-        color: Colors.white,
-        border: Border(bottom: BorderSide(color: _AdminColors.border)),
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [Color(0xFF071B45), Color(0xFF0A2F66)],
+        ),
       ),
       child: Row(
         children: [
-          Builder(
-            builder:
-                (context) => IconButton(
-                  tooltip: 'Open menu',
-                  onPressed: () => Scaffold.of(context).openDrawer(),
-                  icon: const Icon(Icons.menu_rounded, size: 26),
-                ),
+          IconButton(
+            tooltip: 'Back',
+            onPressed: () => Navigator.maybePop(context),
+            icon: const Icon(Icons.arrow_back_rounded, size: 28),
+            color: Colors.white,
           ),
-          const SizedBox(width: 6),
+          const SizedBox(width: 8),
           Expanded(
             child: Text(
               page.title,
-              maxLines: 2,
+              textAlign: TextAlign.center,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
               softWrap: true,
               style: TextStyle(
-                color: _AdminColors.navy,
-                fontSize: compact ? 19 : 22,
+                color: Colors.white,
+                fontSize: compact ? 22 : 26,
                 fontWeight: FontWeight.w900,
                 letterSpacing: 0,
               ),
             ),
           ),
-          _AdminAvatar(compact: compact),
+          const SizedBox(width: 48),
         ],
       ),
     );
   }
 }
 
-class _Sidebar extends StatelessWidget {
-  const _Sidebar({
+class _AdminBottomNav extends StatelessWidget {
+  const _AdminBottomNav({
     required this.pages,
     required this.selectedIndex,
     required this.onSelected,
-    required this.onLogout,
   });
 
   final List<_AdminPage> pages;
   final int selectedIndex;
   final ValueChanged<int> onSelected;
-  final VoidCallback onLogout;
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      width: 260,
-      color: Colors.white,
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        border: const Border(top: BorderSide(color: _AdminColors.border)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.06),
+            blurRadius: 18,
+            offset: const Offset(0, -6),
+          ),
+        ],
+      ),
       child: SafeArea(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Padding(
-              padding: EdgeInsets.fromLTRB(20, 24, 20, 18),
-              child: Text(
-                'Rapid Test Admin',
-                style: TextStyle(
-                  color: _AdminColors.navy,
-                  fontSize: 21,
-                  fontWeight: FontWeight.w900,
+        top: false,
+        child: SizedBox(
+          height: 72,
+          child: Row(
+            children: [
+              for (final entry in pages.indexed)
+                Expanded(
+                  child: _AdminBottomNavItem(
+                    page: entry.$2,
+                    selected: entry.$1 == selectedIndex,
+                    onTap: () => onSelected(entry.$1),
+                  ),
                 ),
-              ),
-            ),
-            for (final entry in pages.indexed)
-              _SidebarItem(
-                page: entry.$2,
-                selected: entry.$1 == selectedIndex,
-                onTap: () => onSelected(entry.$1),
-              ),
-            const Spacer(),
-            _SidebarItem(
-              page: const _AdminPage('Logout', 'Logout', Icons.logout_rounded),
-              selected: false,
-              onTap: onLogout,
-            ),
-            const SizedBox(height: 18),
-          ],
+            ],
+          ),
         ),
       ),
     );
   }
 }
 
-class _AdminDrawer extends StatelessWidget {
-  const _AdminDrawer({
-    required this.pages,
-    required this.selectedIndex,
-    required this.onSelected,
-    required this.onLogout,
-  });
-
-  final List<_AdminPage> pages;
-  final int selectedIndex;
-  final ValueChanged<int> onSelected;
-  final VoidCallback onLogout;
-
-  @override
-  Widget build(BuildContext context) {
-    return Drawer(
-      child: _Sidebar(
-        pages: pages,
-        selectedIndex: selectedIndex,
-        onSelected: onSelected,
-        onLogout: onLogout,
-      ),
-    );
-  }
-}
-
-class _SidebarItem extends StatelessWidget {
-  const _SidebarItem({
+class _AdminBottomNavItem extends StatelessWidget {
+  const _AdminBottomNavItem({
     required this.page,
     required this.selected,
     required this.onTap,
@@ -1039,35 +1941,26 @@ class _SidebarItem extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-      child: Material(
-        color: selected ? _AdminColors.blue.withOpacity(0.1) : Colors.white,
-        borderRadius: BorderRadius.circular(8),
-        child: InkWell(
-          onTap: onTap,
-          borderRadius: BorderRadius.circular(8),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 13),
-            child: Row(
-              children: [
-                Icon(
-                  page.icon,
-                  color: selected ? _AdminColors.blue : _AdminColors.muted,
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Text(
-                    page.name,
-                    style: TextStyle(
-                      color: selected ? _AdminColors.blue : _AdminColors.navy,
-                      fontWeight: selected ? FontWeight.w800 : FontWeight.w600,
-                    ),
-                  ),
-                ),
-              ],
+    final color = selected ? _AdminColors.blue : const Color(0xFF606A80);
+    return InkWell(
+      onTap: onTap,
+      child: SizedBox.expand(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(page.icon, color: color, size: 25),
+            const SizedBox(height: 4),
+            Text(
+              page.name,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: color,
+                fontSize: 12,
+                fontWeight: selected ? FontWeight.w800 : FontWeight.w600,
+              ),
             ),
-          ),
+          ],
         ),
       ),
     );
@@ -1531,18 +2424,25 @@ class _QuickActions extends StatelessWidget {
   Widget build(BuildContext context) {
     final actions = [
       _ActionTile(
-        title: 'All Records',
-        subtitle: 'View all test records',
-        icon: Icons.apps_rounded,
+        title: 'Kits',
+        subtitle: 'Upload QR kits',
+        icon: Icons.inventory_2_rounded,
         color: _AdminColors.blue,
         onTap: () => onTap?.call(1),
       ),
       _ActionTile(
-        title: 'Export Dataset',
-        subtitle: 'Download data',
-        icon: Icons.download_rounded,
+        title: 'Scans',
+        subtitle: 'View all test records',
+        icon: Icons.qr_code_scanner_rounded,
         color: _AdminColors.green,
         onTap: () => onTap?.call(2),
+      ),
+      _ActionTile(
+        title: 'Reports',
+        subtitle: 'Download data',
+        icon: Icons.bar_chart_rounded,
+        color: _AdminColors.purple,
+        onTap: () => onTap?.call(3),
       ),
     ];
     return _Panel(
@@ -1749,6 +2649,26 @@ class _RecordIdentity extends StatelessWidget {
           overflow: TextOverflow.ellipsis,
           style: const TextStyle(color: _AdminColors.muted),
         ),
+        if (record.kitCategory.isNotEmpty ||
+            record.kitSampleType.isNotEmpty ||
+            record.kitManufacturer.isNotEmpty) ...[
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 6,
+            runSpacing: 6,
+            children: [
+              if (record.kitCategory.isNotEmpty)
+                _MiniInfoChip(label: record.kitCategory, icon: Icons.category),
+              if (record.kitSampleType.isNotEmpty)
+                _MiniInfoChip(label: record.kitSampleType, icon: Icons.science),
+              if (record.kitManufacturer.isNotEmpty)
+                _MiniInfoChip(
+                  label: record.kitManufacturer,
+                  icon: Icons.business,
+                ),
+            ],
+          ),
+        ],
       ],
     );
   }
@@ -2691,34 +3611,6 @@ class _PersonAvatar extends StatelessWidget {
         _initials(name),
         style: TextStyle(color: color, fontWeight: FontWeight.w900),
       ),
-    );
-  }
-}
-
-class _AdminAvatar extends StatelessWidget {
-  const _AdminAvatar({this.compact = false});
-
-  final bool compact;
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      mainAxisAlignment: MainAxisAlignment.center,
-      children: [
-        CircleAvatar(
-          radius: compact ? 20 : 24,
-          backgroundColor: const Color(0xFFE7F1FF),
-          child: Icon(
-            Icons.person_rounded,
-            color: _AdminColors.navy,
-            size: compact ? 20 : 24,
-          ),
-        ),
-        if (!compact) ...[
-          const SizedBox(height: 3),
-          const Text('Admin', style: TextStyle(fontWeight: FontWeight.w700)),
-        ],
-      ],
     );
   }
 }

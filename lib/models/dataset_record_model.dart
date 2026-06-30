@@ -12,6 +12,15 @@ class DatasetRecordModel {
     required this.qrCodeValue,
     required this.kitId,
     required this.testType,
+    required this.isKnownQrKit,
+    required this.matchedQrCode,
+    required this.matchedKitName,
+    required this.kitCategory,
+    required this.kitSampleType,
+    required this.kitManufacturer,
+    required this.kitDescription,
+    required this.kitQrImageUrl,
+    required this.kitQrImageName,
     required this.selectedResult,
     required this.imageUrl,
     required this.imageName,
@@ -30,6 +39,15 @@ class DatasetRecordModel {
   final String qrCodeValue;
   final String kitId;
   final String testType;
+  final bool isKnownQrKit;
+  final String matchedQrCode;
+  final String matchedKitName;
+  final String kitCategory;
+  final String kitSampleType;
+  final String kitManufacturer;
+  final String kitDescription;
+  final String kitQrImageUrl;
+  final String kitQrImageName;
   final String selectedResult;
   final String imageUrl;
   final String imageName;
@@ -80,6 +98,15 @@ class DatasetRecordModel {
       qrCodeValue: data['qrCodeValue'] ?? data['qrValue'] ?? '',
       kitId: data['kitId'] ?? '',
       testType: data['testType'] ?? data['testName'] ?? '',
+      isKnownQrKit: data['isKnownQrKit'] == true,
+      matchedQrCode: data['matchedQrCode'] ?? '',
+      matchedKitName: data['matchedKitName'] ?? '',
+      kitCategory: data['kitCategory'] ?? '',
+      kitSampleType: data['kitSampleType'] ?? '',
+      kitManufacturer: data['kitManufacturer'] ?? '',
+      kitDescription: data['kitDescription'] ?? '',
+      kitQrImageUrl: data['kitQrImageUrl'] ?? '',
+      kitQrImageName: data['kitQrImageName'] ?? '',
       selectedResult: data['selectedResult'] ?? '',
       imageUrl: _readFirstString(data, [
         'imageUrl',
@@ -113,6 +140,15 @@ class DatasetRecordModel {
       'qrCodeValue': qrCodeValue,
       'kitId': kitId,
       'testType': testType,
+      'isKnownQrKit': isKnownQrKit,
+      'matchedQrCode': matchedQrCode,
+      'matchedKitName': matchedKitName,
+      'kitCategory': kitCategory,
+      'kitSampleType': kitSampleType,
+      'kitManufacturer': kitManufacturer,
+      'kitDescription': kitDescription,
+      'kitQrImageUrl': kitQrImageUrl,
+      'kitQrImageName': kitQrImageName,
       'selectedResult': selectedResult,
       'imageUrl': imageUrl,
       'imageName': imageName,

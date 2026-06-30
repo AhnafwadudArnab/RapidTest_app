@@ -1,10 +1,6 @@
-// ignore_for_file: unused_field
-import 'dart:async';
-
 import 'package:email_validator/email_validator.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:fluttertoast/fluttertoast.dart';
 import 'package:get/get.dart';
@@ -139,7 +135,7 @@ class _LoginFormWidgetState extends State<LoginFormWidget> {
                 prefixIcon: Icon(Icons.person, color: Colors.black),
               ),
               validator: (value) {
-                if (value == null || value.isEmpty) {
+                if (value == null || value.trim().isEmpty) {
                   return 'Please enter your name';
                 }
                 return null;
@@ -240,31 +236,57 @@ class _LoginFormWidgetState extends State<LoginFormWidget> {
                           });
 
                           try {
+                            final username = nameController.text.trim();
+                            final normalizedUsername = _normalizeUsername(
+                              username,
+                            );
+                            final usernameDoc =
+                                await FirebaseFirestore.instance
+                                    .collection('usernames')
+                                    .doc(normalizedUsername)
+                                    .get();
+                            if (usernameDoc.exists) {
+                              Fluttertoast.showToast(
+                                msg:
+                                    "Username is already taken. Please choose another.",
+                              );
+                              return;
+                            }
+
                             User? user = await _auth.signUpWithEmailAndPassword(
                               emailController.text,
                               passwordController.text,
                             );
 
                             if (user != null) {
-                              unawaited(
+                              final email = emailController.text.trim();
+                              final batch = FirebaseFirestore.instance.batch();
+                              batch.set(
                                 FirebaseFirestore.instance
                                     .collection('users')
-                                    .doc(user.uid)
-                                    .set({
-                                      'name': nameController.text.trim(),
-                                      'email': emailController.text.trim(),
-                                      'role': 'user',
-                                      'createdAt': FieldValue.serverTimestamp(),
-                                      'updatedAt': FieldValue.serverTimestamp(),
-                                    }, SetOptions(merge: true))
-                                    .catchError((e) {
-                                      if (kDebugMode) {
-                                        debugPrint(
-                                          'User profile save failed: $e',
-                                        );
-                                      }
-                                    }),
+                                    .doc(user.uid),
+                                {
+                                  'name': username,
+                                  'usernameLower': normalizedUsername,
+                                  'email': email,
+                                  'role': 'user',
+                                  'createdAt': FieldValue.serverTimestamp(),
+                                  'updatedAt': FieldValue.serverTimestamp(),
+                                },
+                                SetOptions(merge: true),
                               );
+                              batch.set(
+                                FirebaseFirestore.instance
+                                    .collection('usernames')
+                                    .doc(normalizedUsername),
+                                {
+                                  'uid': user.uid,
+                                  'email': email,
+                                  'createdAt': FieldValue.serverTimestamp(),
+                                  'updatedAt': FieldValue.serverTimestamp(),
+                                },
+                              );
+                              await batch.commit();
                               Fluttertoast.showToast(
                                 msg: "Registration successful!",
                               );
@@ -352,5 +374,9 @@ class _LoginFormWidgetState extends State<LoginFormWidget> {
         ),
       ),
     );
+  }
+
+  String _normalizeUsername(String value) {
+    return value.trim().toLowerCase().replaceAll(RegExp(r'\s+'), '');
   }
 }

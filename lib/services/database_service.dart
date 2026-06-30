@@ -24,6 +24,28 @@ class DatabaseService {
   CollectionReference<Map<String, dynamic>> get _records =>
       _firestore.collection('dataset_records');
 
+  CollectionReference<Map<String, dynamic>> get _qrKits =>
+      _firestore.collection('qr_kits');
+
+  static const List<QrKitRecord> defaultQrKits = [
+    QrKitRecord(
+      qrCode: 'CRATS160525',
+      kitName: 'Covid-19 Rapid Antigen Test Kit',
+      category: 'Infectious disease',
+      sampleType: 'Nasal swab',
+      manufacturer: 'Rapid Test Kit',
+      description: 'Admin default kit for QR code CRATS160525.',
+    ),
+    QrKitRecord(
+      qrCode: 'MRATC120525',
+      kitName: 'Malaria Pf/Pan Combo Test Kit',
+      category: 'Infectious disease',
+      sampleType: 'Blood',
+      manufacturer: 'Rapid Test Kit',
+      description: 'Admin default kit for QR code MRATC120525.',
+    ),
+  ];
+
   Future<void> submitDatasetRecord({
     required ParsedQrData? qrData,
     required String selectedResult,
@@ -48,6 +70,11 @@ class DatabaseService {
         (qrData?.testType ?? '').isNotEmpty
             ? qrData!.testType
             : fallbackTestType;
+    final qrExtraData = qrData?.extraData ?? const <String, dynamic>{};
+    final matchedKitDetails =
+        qrExtraData['matchedKitDetails'] is Map<String, dynamic>
+            ? qrExtraData['matchedKitDetails'] as Map<String, dynamic>
+            : const <String, dynamic>{};
     var imageStoragePath = '';
     var imageUrl = '';
     var imageUploadError = '';
@@ -84,6 +111,16 @@ class DatabaseService {
       'qrCodeValue': resolvedTestType,
       'kitId': qrData?.kitId ?? '',
       'testType': resolvedTestType,
+      'isKnownQrKit': qrData?.isKnownKit == true,
+      'matchedQrKitId': qrExtraData['matchedQrKitId'] ?? '',
+      'matchedQrCode': qrExtraData['matchedQrCode'] ?? '',
+      'matchedKitName': qrExtraData['matchedKitName'] ?? '',
+      'kitCategory': matchedKitDetails['category'] ?? '',
+      'kitSampleType': matchedKitDetails['sampleType'] ?? '',
+      'kitManufacturer': matchedKitDetails['manufacturer'] ?? '',
+      'kitDescription': matchedKitDetails['description'] ?? '',
+      'kitQrImageUrl': matchedKitDetails['qrImageUrl'] ?? '',
+      'kitQrImageName': matchedKitDetails['qrImageName'] ?? '',
       'selectedResult': selectedResult,
       'imageUrl': imageUrl,
       'imageName': imageName ?? '',
@@ -92,11 +129,173 @@ class DatabaseService {
       'adminComment': imageUploadError,
       'reviewedBy': 'Auto Approval',
       'reviewedAt': now,
-      'qrParsedData': qrData?.extraData ?? {},
+      'qrParsedData': qrExtraData,
       'submittedAt': now,
       'createdAt': now,
       'updatedAt': now,
     });
+  }
+
+  Stream<QuerySnapshot<Map<String, dynamic>>> watchQrKits() {
+    return _qrKits.orderBy('kitName').snapshots();
+  }
+
+  Future<void> saveQrKit({
+    required String qrCode,
+    required String kitName,
+    String category = '',
+    String sampleType = '',
+    String manufacturer = '',
+    String description = '',
+    Uint8List? qrImageBytes,
+    String? qrImageName,
+  }) async {
+    final normalizedCode = normalizeQrKitCode(qrCode);
+    final cleanKitName = kitName.trim();
+    if (normalizedCode.isEmpty || cleanKitName.isEmpty) {
+      throw ArgumentError('QR code and kit name are required.');
+    }
+
+    final docRef = _qrKits.doc(qrKitDocumentId(normalizedCode));
+    final existing = await docRef.get();
+    final existingData = existing.data() ?? const <String, dynamic>{};
+    var qrImageUrl = (existingData['qrImageUrl'] ?? '').toString();
+    var qrImageStoragePath =
+        (existingData['qrImageStoragePath'] ?? '').toString();
+    final cleanQrImageName = qrImageName?.trim() ?? '';
+
+    if (qrImageBytes != null && qrImageBytes.isNotEmpty) {
+      final safeImageName = _safeImageName(
+        cleanQrImageName.isEmpty ? null : cleanQrImageName,
+        docRef.id,
+      );
+      qrImageStoragePath =
+          'qr_kit_images/${docRef.id}/${DateTime.now().millisecondsSinceEpoch}_$safeImageName';
+      final ref = _storage.ref(qrImageStoragePath);
+      final uploadTask = await ref.putData(
+        qrImageBytes,
+        SettableMetadata(contentType: _contentTypeFor(safeImageName)),
+      );
+      qrImageUrl = await uploadTask.ref.getDownloadURL();
+    }
+
+    final data = {
+      'qrCode': normalizedCode,
+      'qrCodeNormalized': normalizedCode,
+      'kitName': cleanKitName,
+      'category': category.trim(),
+      'sampleType': sampleType.trim(),
+      'manufacturer': manufacturer.trim(),
+      'description': description.trim(),
+      'qrImageUrl': qrImageUrl,
+      'qrImageName':
+          cleanQrImageName.isNotEmpty
+              ? cleanQrImageName
+              : (existingData['qrImageName'] ?? '').toString(),
+      'qrImageStoragePath': qrImageStoragePath,
+      'isActive': true,
+      'updatedAt': FieldValue.serverTimestamp(),
+      if (!existing.exists) 'createdAt': FieldValue.serverTimestamp(),
+    };
+    await docRef.set(data, SetOptions(merge: true));
+  }
+
+  Future<void> deleteQrKit(String qrCode) {
+    return _qrKits.doc(qrKitDocumentId(qrCode)).delete();
+  }
+
+  Future<void> seedDefaultQrKits() async {
+    for (final kit in defaultQrKits) {
+      await saveQrKit(
+        qrCode: kit.qrCode,
+        kitName: kit.kitName,
+        category: kit.category,
+        sampleType: kit.sampleType,
+        manufacturer: kit.manufacturer,
+        description: kit.description,
+      );
+    }
+  }
+
+  Future<ParsedQrData> resolveQrKit(ParsedQrData qrData) async {
+    final candidates = <String>{
+      normalizeQrKitCode(qrData.rawValue),
+      normalizeQrKitCode(qrData.kitId),
+      normalizeQrKitCode(qrData.testType),
+    }..removeWhere((value) => value.isEmpty);
+
+    try {
+      for (final code in candidates) {
+        final doc = await _qrKits.doc(qrKitDocumentId(code)).get();
+        final kit = QrKitRecord.fromMap(doc.id, doc.data());
+        if (kit != null && kit.isActive) {
+          return _applyResolvedKit(qrData, kit);
+        }
+      }
+
+      if (candidates.isNotEmpty) {
+        final snapshot =
+            await _qrKits
+                .where(
+                  'qrCodeNormalized',
+                  whereIn: candidates.take(10).toList(),
+                )
+                .limit(1)
+                .get();
+        if (snapshot.docs.isNotEmpty) {
+          final doc = snapshot.docs.first;
+          final kit = QrKitRecord.fromMap(doc.id, doc.data());
+          if (kit != null && kit.isActive) {
+            return _applyResolvedKit(qrData, kit);
+          }
+        }
+      }
+    } on FirebaseException {
+      // Local bundled kits still resolve when rules are not deployed yet.
+    }
+
+    for (final code in candidates) {
+      final kit = _defaultQrKitFor(code);
+      if (kit != null && kit.isActive) {
+        return _applyResolvedKit(qrData, kit);
+      }
+    }
+
+    return qrData;
+  }
+
+  QrKitRecord? _defaultQrKitFor(String code) {
+    final normalizedCode = normalizeQrKitCode(code);
+    for (final kit in defaultQrKits) {
+      if (normalizeQrKitCode(kit.qrCode) == normalizedCode) return kit;
+    }
+    return null;
+  }
+
+  ParsedQrData _applyResolvedKit(ParsedQrData qrData, QrKitRecord kit) {
+    return qrData.copyWith(
+      kitId: kit.qrCode,
+      testType: kit.kitName,
+      isKnownKit: true,
+      extraData: {
+        ...qrData.extraData,
+        'isKnownKit': true,
+        'matchedQrCode': kit.qrCode,
+        'matchedKitName': kit.kitName,
+        'matchedQrKitId': qrKitDocumentId(kit.qrCode),
+        'matchedKitDetails': kit.toMap(),
+      },
+    );
+  }
+
+  static String normalizeQrKitCode(String value) {
+    return value.trim().toUpperCase().replaceAll(RegExp(r'\s+'), '');
+  }
+
+  static String qrKitDocumentId(String value) {
+    final normalized = normalizeQrKitCode(value);
+    final safe = normalized.replaceAll(RegExp(r'[^A-Z0-9_-]'), '_');
+    return safe.isEmpty ? 'UNKNOWN_QR_KIT' : safe;
   }
 
   String _contentTypeFor(String imageName) {
@@ -218,5 +417,66 @@ class DatabaseService {
     }
 
     return _auth.currentUser;
+  }
+}
+
+class QrKitRecord {
+  const QrKitRecord({
+    required this.qrCode,
+    required this.kitName,
+    this.category = '',
+    this.sampleType = '',
+    this.manufacturer = '',
+    this.description = '',
+    this.qrImageUrl = '',
+    this.qrImageName = '',
+    this.qrImageStoragePath = '',
+    this.isActive = true,
+  });
+
+  final String qrCode;
+  final String kitName;
+  final String category;
+  final String sampleType;
+  final String manufacturer;
+  final String description;
+  final String qrImageUrl;
+  final String qrImageName;
+  final String qrImageStoragePath;
+  final bool isActive;
+
+  static QrKitRecord? fromMap(String id, Map<String, dynamic>? data) {
+    if (data == null) return null;
+    final qrCode =
+        (data['qrCode'] ?? data['qrCodeNormalized'] ?? id).toString();
+    final kitName = (data['kitName'] ?? data['testType'] ?? '').toString();
+    if (qrCode.trim().isEmpty || kitName.trim().isEmpty) return null;
+    return QrKitRecord(
+      qrCode: DatabaseService.normalizeQrKitCode(qrCode),
+      kitName: kitName.trim(),
+      category: (data['category'] ?? '').toString().trim(),
+      sampleType: (data['sampleType'] ?? '').toString().trim(),
+      manufacturer: (data['manufacturer'] ?? '').toString().trim(),
+      description: (data['description'] ?? '').toString().trim(),
+      qrImageUrl: (data['qrImageUrl'] ?? '').toString().trim(),
+      qrImageName: (data['qrImageName'] ?? '').toString().trim(),
+      qrImageStoragePath: (data['qrImageStoragePath'] ?? '').toString().trim(),
+      isActive: data['isActive'] != false,
+    );
+  }
+
+  Map<String, dynamic> toMap() {
+    return {
+      'qrCode': qrCode,
+      'kitName': kitName,
+      'category': category,
+      'sampleType': sampleType,
+      'manufacturer': manufacturer,
+      'description': description,
+      'qrImageUrl': qrImageUrl,
+      'qrImageName': qrImageName,
+      'qrImageStoragePath': qrImageStoragePath,
+      'isActive': isActive,
+    };
   }
 }

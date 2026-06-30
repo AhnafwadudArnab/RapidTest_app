@@ -6,12 +6,30 @@ class ParsedQrData {
     required this.kitId,
     required this.testType,
     required this.extraData,
+    this.isKnownKit = false,
   });
 
   final String rawValue;
   final String kitId;
   final String testType;
   final Map<String, dynamic> extraData;
+  final bool isKnownKit;
+
+  ParsedQrData copyWith({
+    String? rawValue,
+    String? kitId,
+    String? testType,
+    Map<String, dynamic>? extraData,
+    bool? isKnownKit,
+  }) {
+    return ParsedQrData(
+      rawValue: rawValue ?? this.rawValue,
+      kitId: kitId ?? this.kitId,
+      testType: testType ?? this.testType,
+      extraData: extraData ?? this.extraData,
+      isKnownKit: isKnownKit ?? this.isKnownKit,
+    );
+  }
 }
 
 class QrParserService {

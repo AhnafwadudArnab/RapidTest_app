@@ -1,3 +1,4 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:fluttertoast/fluttertoast.dart';
@@ -72,16 +73,15 @@ class LoginFormWidget extends StatefulWidget {
 
 class LoginFormWidgetState extends State<LoginFormWidget> {
   final FirebaseAuth _auth = FirebaseAuth.instance;
-  final TextEditingController emailController = TextEditingController();
-  final TextEditingController nameController = TextEditingController();
+  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+  final TextEditingController identifierController = TextEditingController();
   final TextEditingController passwordController = TextEditingController();
   final GlobalKey<FormState> formKey = GlobalKey<FormState>();
   bool isVisible = true;
 
   @override
   void dispose() {
-    emailController.dispose();
-    nameController.dispose();
+    identifierController.dispose();
     passwordController.dispose();
     super.dispose();
   }
@@ -101,35 +101,17 @@ class LoginFormWidgetState extends State<LoginFormWidget> {
               style: TextStyle(fontSize: 24.0, fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 12.0),
-            // Name field
             TextFormField(
-              controller: nameController,
+              controller: identifierController,
               decoration: const InputDecoration(
-                labelText: 'Username',
+                labelText: 'Email or Username',
                 labelStyle: TextStyle(color: Colors.black),
-                prefixIcon: Icon(Icons.person, color: Colors.black),
+                prefixIcon: Icon(Icons.alternate_email, color: Colors.black),
               ),
               style: const TextStyle(color: Colors.black),
               validator: (value) {
-                if (value == null || value.isEmpty) {
-                  return 'Please enter your name';
-                }
-                return null;
-              },
-            ),
-            const SizedBox(height: 14.0),
-            // Email field
-            TextFormField(
-              controller: emailController,
-              decoration: const InputDecoration(
-                labelText: 'Email',
-                labelStyle: TextStyle(color: Colors.black),
-                prefixIcon: Icon(Icons.email, color: Colors.black),
-              ),
-              style: const TextStyle(color: Colors.black),
-              validator: (value) {
-                if (value == null || value.isEmpty) {
-                  return 'Please enter your email';
+                if (value == null || value.trim().isEmpty) {
+                  return 'Please enter your email or username';
                 }
                 return null;
               },
@@ -217,15 +199,17 @@ class LoginFormWidgetState extends State<LoginFormWidget> {
               ),
               onPressed: () async {
                 if (formKey.currentState!.validate()) {
-                  User? user = await _signInWithEmailAndPassword(
-                    emailController.text,
+                  User? user = await _signInWithIdentifierAndPassword(
+                    identifierController.text,
                     passwordController.text,
                   );
                   if (user != null) {
                     Fluttertoast.showToast(msg: "Login successful");
                     Get.to(() => const Testsfiles());
                   } else {
-                    Fluttertoast.showToast(msg: "Invalid email or password");
+                    Fluttertoast.showToast(
+                      msg: "Invalid email/username or password",
+                    );
                   }
                 }
               },
@@ -268,11 +252,14 @@ class LoginFormWidgetState extends State<LoginFormWidget> {
     );
   }
 
-  Future<User?> _signInWithEmailAndPassword(
-    String email,
+  Future<User?> _signInWithIdentifierAndPassword(
+    String identifier,
     String password,
   ) async {
     try {
+      final email = await _resolveEmail(identifier);
+      if (email == null || email.isEmpty) return null;
+
       UserCredential userCredential = await _auth.signInWithEmailAndPassword(
         email: email,
         password: password,
@@ -282,5 +269,22 @@ class LoginFormWidgetState extends State<LoginFormWidget> {
     } catch (_) {
       return null;
     }
+  }
+
+  Future<String?> _resolveEmail(String identifier) async {
+    final value = identifier.trim();
+    if (value.contains('@')) return value;
+
+    final usernameDoc =
+        await _firestore
+            .collection('usernames')
+            .doc(_normalizeUsername(value))
+            .get();
+    final email = usernameDoc.data()?['email'];
+    return email is String ? email.trim() : null;
+  }
+
+  String _normalizeUsername(String value) {
+    return value.trim().toLowerCase().replaceAll(RegExp(r'\s+'), '');
   }
 }

@@ -42,6 +42,16 @@ service cloud.firestore {
           'qrCodeValue',
           'kitId',
           'testType',
+          'isKnownQrKit',
+          'matchedQrKitId',
+          'matchedQrCode',
+          'matchedKitName',
+          'kitCategory',
+          'kitSampleType',
+          'kitManufacturer',
+          'kitDescription',
+          'kitQrImageUrl',
+          'kitQrImageName',
           'selectedResult',
           'imageUrl',
           'imageName',
@@ -76,12 +86,22 @@ service cloud.firestore {
         && request.resource.data.updatedAt is timestamp
         && (!('reviewedAt' in request.resource.data) || request.resource.data.reviewedAt is timestamp)
         && (!('qrParsedData' in request.resource.data) || request.resource.data.qrParsedData is map)
+        && (!('isKnownQrKit' in request.resource.data) || request.resource.data.isKnownQrKit is bool)
         && validDatasetString('recordId', 80)
         && validDatasetString('userName', 120)
         && validDatasetString('userEmail', 180)
         && validDatasetString('qrCodeValue', 2000)
         && validDatasetString('kitId', 160)
         && validDatasetString('testType', 160)
+        && validDatasetString('matchedQrKitId', 180)
+        && validDatasetString('matchedQrCode', 160)
+        && validDatasetString('matchedKitName', 160)
+        && validDatasetString('kitCategory', 120)
+        && validDatasetString('kitSampleType', 120)
+        && validDatasetString('kitManufacturer', 160)
+        && validDatasetString('kitDescription', 500)
+        && validDatasetString('kitQrImageUrl', 1200)
+        && validDatasetString('kitQrImageName', 260)
         && validDatasetString('imageUrl', 1200)
         && validDatasetString('imageName', 260)
         && validDatasetString('imageStoragePath', 500)
@@ -110,22 +130,28 @@ service cloud.firestore {
     function validUserProfileFields() {
       return request.resource.data.keys().hasOnly([
           'name',
+          'usernameLower',
           'email',
           'phone',
           'bloodGroup',
           'bio',
           'address',
+          'profilePhotoUrl',
+          'profilePhotoStoragePath',
           'role',
           'createdAt',
           'updatedAt'
         ])
         && (!('role' in request.resource.data) || request.resource.data.role == 'user')
         && validDatasetString('name', 120)
+        && validDatasetString('usernameLower', 120)
         && validDatasetString('email', 180)
         && validDatasetString('phone', 40)
         && validDatasetString('bloodGroup', 20)
         && validDatasetString('bio', 500)
         && validDatasetString('address', 500)
+        && validDatasetString('profilePhotoUrl', 1200)
+        && validDatasetString('profilePhotoStoragePath', 500)
         && (!('createdAt' in request.resource.data) || request.resource.data.createdAt is timestamp)
         && (!('updatedAt' in request.resource.data) || request.resource.data.updatedAt is timestamp);
     }
@@ -133,6 +159,46 @@ service cloud.firestore {
     function validUserProfileUpdate() {
       return validUserProfileFields()
         && (!('role' in resource.data) || resource.data.role == request.resource.data.role);
+    }
+
+    function validQrKitFields() {
+      return request.resource.data.keys().hasOnly([
+          'qrCode',
+          'qrCodeNormalized',
+          'kitName',
+          'category',
+          'sampleType',
+          'manufacturer',
+          'description',
+          'qrImageUrl',
+          'qrImageName',
+          'qrImageStoragePath',
+          'isActive',
+          'createdAt',
+          'updatedAt'
+        ])
+        && request.resource.data.keys().hasAll([
+          'qrCode',
+          'qrCodeNormalized',
+          'kitName',
+          'isActive'
+        ])
+        && request.resource.data.qrCode is string
+        && request.resource.data.qrCodeNormalized is string
+        && request.resource.data.kitName is string
+        && request.resource.data.isActive is bool
+        && request.resource.data.qrCode.size() <= 160
+        && request.resource.data.qrCodeNormalized.size() <= 160
+        && request.resource.data.kitName.size() <= 160
+        && validDatasetString('category', 120)
+        && validDatasetString('sampleType', 120)
+        && validDatasetString('manufacturer', 160)
+        && validDatasetString('description', 500)
+        && validDatasetString('qrImageUrl', 1200)
+        && validDatasetString('qrImageName', 260)
+        && validDatasetString('qrImageStoragePath', 500)
+        && (!('createdAt' in request.resource.data) || request.resource.data.createdAt is timestamp)
+        && (!('updatedAt' in request.resource.data) || request.resource.data.updatedAt is timestamp);
     }
 
     match /users/{userId} {
@@ -150,10 +216,34 @@ service cloud.firestore {
       allow update, delete: if isAdmin();
     }
 
+    match /usernames/{username} {
+      allow get: if true;
+      allow list: if false;
+      allow create: if signedIn()
+        && request.resource.data.keys().hasOnly([
+          'uid',
+          'email',
+          'createdAt',
+          'updatedAt'
+        ])
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.email is string
+        && request.resource.data.email.size() <= 180
+        && (!('createdAt' in request.resource.data) || request.resource.data.createdAt is timestamp)
+        && (!('updatedAt' in request.resource.data) || request.resource.data.updatedAt is timestamp);
+      allow update, delete: if isAdmin();
+    }
+
     match /dataset_records/{recordDocId} {
       allow create: if signedIn() && validDatasetCreate(recordDocId);
       allow read: if isAdmin() || isOwner(resource.data.userId);
       allow update: if isAdmin() && validAdminReviewUpdate();
+      allow delete: if isAdmin();
+    }
+
+    match /qr_kits/{kitDocId} {
+      allow read: if signedIn();
+      allow create, update: if isAdmin() && validQrKitFields();
       allow delete: if isAdmin();
     }
   }

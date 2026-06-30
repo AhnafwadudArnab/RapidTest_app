@@ -10,6 +10,8 @@ import 'package:image_picker/image_picker.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 
 import '../services/database_service.dart';
+import '../services/qr_image_decoder_stub.dart'
+    if (dart.library.html) '../services/qr_image_decoder_web.dart';
 import '../services/qr_parser_service.dart';
 import '../widgets/result_option_card.dart';
 
@@ -45,6 +47,8 @@ class _QrResultSubmissionPageState extends State<QrResultSubmissionPage> {
   File? _selectedImage;
   Uint8List? _selectedImageBytes;
   String? _selectedImageName;
+  Uint8List? _qrCropPreviewBytes;
+  Uint8List? _qrCandidatePreviewBytes;
   String? _selectedResult;
   bool _isReadingQr = false;
   bool _isSaving = false;
@@ -59,10 +63,6 @@ class _QrResultSubmissionPageState extends State<QrResultSubmissionPage> {
     final qrData = _qrData;
     final selectedResult = _selectedResult;
 
-    if (selectedResult == null) {
-      _showSnackBar('Select Positive or Negative.');
-      return;
-    }
     final imageFile = _selectedImage;
     final imageBytes = _selectedImageBytes;
     final imageName = _selectedImageName;
@@ -70,14 +70,22 @@ class _QrResultSubmissionPageState extends State<QrResultSubmissionPage> {
       _showSnackBar('Take or upload a kit photo before submitting.');
       return;
     }
+    if (qrData == null) {
+      _showSnackBar('QR code must be read before submitting.');
+      return;
+    }
+    if (selectedResult == null) {
+      _showSnackBar('Select Positive or Negative.');
+      return;
+    }
     final fallbackTestType =
         widget.name.trim().isNotEmpty
             ? widget.name.trim()
-            : 'Kit photo without QR';
+            : qrData.testType.trim().isNotEmpty
+            ? qrData.testType.trim()
+            : qrData.rawValue.trim();
     final submittedKitName =
-        qrData?.testType.trim().isNotEmpty == true
-            ? qrData!.testType
-            : fallbackTestType;
+        qrData.testType.trim().isNotEmpty ? qrData.testType : fallbackTestType;
 
     setState(() => _isSaving = true);
     try {
@@ -130,7 +138,12 @@ class _QrResultSubmissionPageState extends State<QrResultSubmissionPage> {
     );
     if (!mounted || rawValue == null || rawValue.trim().isEmpty) return;
 
-    setState(() => _qrData = _qrParserService.parse(rawValue));
+    final qrData = await _parseQrData(rawValue);
+    if (!mounted) return;
+    setState(() {
+      _qrData = qrData;
+      _qrCropPreviewBytes = null;
+    });
     _showSnackBar('QR code scanned.');
   }
 
@@ -145,15 +158,18 @@ class _QrResultSubmissionPageState extends State<QrResultSubmissionPage> {
       if (pickedFile == null) return;
 
       final imageBytes = await pickedFile.readAsBytes();
+      final qrCandidatePreviewBytes = await _createQrPreviewCandidateBytes(
+        imageBytes,
+      );
       setState(() {
         _selectedImage = kIsWeb ? null : File(pickedFile.path);
         _selectedImageBytes = imageBytes;
         _selectedImageName = pickedFile.name;
+        _qrCropPreviewBytes = null;
+        _qrCandidatePreviewBytes = qrCandidatePreviewBytes;
       });
       if (kIsWeb) {
-        if (mounted && _qrData == null) {
-          _showSnackBar('Photo kept. Use Scan QR if the kit has a QR code.');
-        }
+        await _readQrFromImageBytes(imageBytes);
       } else {
         await _readQrFromImage(pickedFile.path);
       }
@@ -170,19 +186,25 @@ class _QrResultSubmissionPageState extends State<QrResultSubmissionPage> {
     setState(() => _isReadingQr = true);
 
     try {
-      final value = await _readQrValueFromImageCandidates(path);
+      final scanResult = await _readQrValueFromImageCandidates(path);
 
       if (!mounted) return;
-      if (value == null || value.isEmpty) {
+      if (scanResult == null || scanResult.value.isEmpty) {
         _showSnackBar(
           _qrData == null
-              ? 'No QR code found. Photo kept; select result and submit.'
+              ? 'No QR code found. Please scan a clear QR code before submit.'
               : 'No new QR found in this photo. Previous QR details kept.',
         );
         return;
       }
 
-      setState(() => _qrData = _qrParserService.parse(value));
+      final qrData = await _parseQrData(scanResult.value);
+      if (!mounted) return;
+      setState(() {
+        _qrData = qrData;
+        _qrCropPreviewBytes = scanResult.previewBytes;
+        _qrCandidatePreviewBytes = scanResult.previewBytes;
+      });
       _showSnackBar('QR code read from photo.');
     } catch (e) {
       if (mounted) _showSnackBar('Could not read QR from photo: $e');
@@ -191,15 +213,55 @@ class _QrResultSubmissionPageState extends State<QrResultSubmissionPage> {
     }
   }
 
-  Future<String?> _readQrValueFromImageCandidates(String path) async {
-    final originalValue = await _readQrValueFromImage(path);
-    if (originalValue != null) return originalValue;
+  Future<void> _readQrFromImageBytes(Uint8List bytes) async {
+    setState(() => _isReadingQr = true);
+
+    try {
+      final candidateBytes = _qrCandidatePreviewBytes;
+      final value =
+          await decodeQrFromImageBytes(bytes) ??
+          (candidateBytes == null
+              ? null
+              : await decodeQrFromImageBytes(candidateBytes));
+
+      if (!mounted) return;
+      if (value == null || value.isEmpty) {
+        _showSnackBar(
+          'No QR code found. Use Scan QR or upload a clearer QR photo.',
+        );
+        return;
+      }
+
+      final qrData = await _parseQrData(value);
+      if (!mounted) return;
+      setState(() {
+        _qrData = qrData;
+        _qrCropPreviewBytes = candidateBytes;
+      });
+      _showSnackBar('QR code read from photo.');
+    } catch (e) {
+      if (mounted) _showSnackBar('Could not read QR from photo: $e');
+    } finally {
+      if (mounted) setState(() => _isReadingQr = false);
+    }
+  }
+
+  Future<_QrImageScanResult?> _readQrValueFromImageCandidates(
+    String path,
+  ) async {
+    final originalResult = await _readQrValueFromImage(path);
+    if (originalResult != null && originalResult.previewBytes != null) {
+      return originalResult;
+    }
 
     final cropPaths = await _createZoomedQrScanCrops(path);
     try {
       for (final cropPath in cropPaths) {
-        final cropValue = await _readQrValueFromImage(cropPath);
-        if (cropValue != null) return cropValue;
+        final cropResult = await _readQrValueFromImage(
+          cropPath,
+          useWholeImageAsPreview: true,
+        );
+        if (cropResult != null) return cropResult;
       }
     } finally {
       for (final cropPath in cropPaths) {
@@ -211,21 +273,128 @@ class _QrResultSubmissionPageState extends State<QrResultSubmissionPage> {
       }
     }
 
-    return null;
+    return originalResult;
   }
 
-  Future<String?> _readQrValueFromImage(String path) async {
+  Future<ParsedQrData> _parseQrData(String rawValue) async {
+    final parsedData = _qrParserService.parse(rawValue);
+    try {
+      return await _databaseService.resolveQrKit(parsedData);
+    } on FirebaseException {
+      return parsedData;
+    }
+  }
+
+  Future<_QrImageScanResult?> _readQrValueFromImage(
+    String path, {
+    bool useWholeImageAsPreview = false,
+  }) async {
     final capture = await _scannerController.analyzeImage(
       path,
       formats: const [BarcodeFormat.qrCode],
     );
 
-    return capture?.barcodes
-        .map((barcode) => barcode.rawValue)
-        .whereType<String>()
-        .map((value) => value.trim())
-        .where((value) => value.isNotEmpty)
-        .firstOrNull;
+    final barcode = capture?.barcodes.firstWhere(
+      (barcode) => barcode.rawValue?.trim().isNotEmpty == true,
+      orElse: () => const Barcode(),
+    );
+    final value = barcode?.rawValue?.trim();
+    if (barcode == null || value == null || value.isEmpty) return null;
+
+    final previewBytes =
+        await _cropBarcodePreviewBytes(path, barcode) ??
+        (useWholeImageAsPreview ? await File(path).readAsBytes() : null);
+    return _QrImageScanResult(value: value, previewBytes: previewBytes);
+  }
+
+  Future<Uint8List?> _cropBarcodePreviewBytes(
+    String path,
+    Barcode barcode,
+  ) async {
+    final file = File(path);
+    if (!await file.exists() || barcode.corners.isEmpty) return null;
+
+    final bytes = await file.readAsBytes();
+    final codec = await ui.instantiateImageCodec(bytes);
+    final frame = await codec.getNextFrame();
+    final image = frame.image;
+    try {
+      final rect = _barcodeCropRect(image, barcode);
+      if (rect == null) return null;
+      return _renderCropToBytes(image, rect);
+    } finally {
+      image.dispose();
+    }
+  }
+
+  Rect? _barcodeCropRect(ui.Image image, Barcode barcode) {
+    final corners = barcode.corners;
+    if (corners.isEmpty) return null;
+
+    final maxX = corners.map((point) => point.dx).reduce(math.max);
+    final maxY = corners.map((point) => point.dy).reduce(math.max);
+    final sourceWidth = image.width.toDouble();
+    final sourceHeight = image.height.toDouble();
+    final scaleX =
+        maxX <= 1.2
+            ? sourceWidth
+            : barcode.size.width > 0
+            ? sourceWidth / barcode.size.width
+            : 1.0;
+    final scaleY =
+        maxY <= 1.2
+            ? sourceHeight
+            : barcode.size.height > 0
+            ? sourceHeight / barcode.size.height
+            : 1.0;
+    final scaled = [
+      for (final point in corners) Offset(point.dx * scaleX, point.dy * scaleY),
+    ];
+    final left = scaled.map((point) => point.dx).reduce(math.min);
+    final top = scaled.map((point) => point.dy).reduce(math.min);
+    final right = scaled.map((point) => point.dx).reduce(math.max);
+    final bottom = scaled.map((point) => point.dy).reduce(math.max);
+    final width = math.max(1.0, right - left);
+    final height = math.max(1.0, bottom - top);
+    final side = math.max(width, height);
+    final padding = math.max(24.0, side * 0.28);
+    final center = Offset((left + right) / 2, (top + bottom) / 2);
+    final cropSide = math.min(
+      math.max(side + padding, 1.0),
+      math.min(sourceWidth, sourceHeight),
+    );
+    final cropLeft = (center.dx - cropSide / 2).clamp(
+      0.0,
+      sourceWidth - cropSide,
+    );
+    final cropTop = (center.dy - cropSide / 2).clamp(
+      0.0,
+      sourceHeight - cropSide,
+    );
+
+    return Rect.fromLTWH(cropLeft, cropTop, cropSide, cropSide);
+  }
+
+  Future<Uint8List?> _renderCropToBytes(ui.Image image, Rect sourceRect) async {
+    final targetSide = math.max(360, math.min(1100, sourceRect.width.round()));
+    final recorder = ui.PictureRecorder();
+    final canvas = Canvas(recorder);
+    canvas.drawColor(Colors.white, BlendMode.src);
+    canvas.drawImageRect(
+      image,
+      sourceRect,
+      Rect.fromLTWH(0, 0, targetSide.toDouble(), targetSide.toDouble()),
+      Paint()..filterQuality = FilterQuality.high,
+    );
+
+    final picture = recorder.endRecording();
+    final croppedImage = await picture.toImage(targetSide, targetSide);
+    final pngBytes = await croppedImage.toByteData(
+      format: ui.ImageByteFormat.png,
+    );
+    croppedImage.dispose();
+    picture.dispose();
+    return pngBytes?.buffer.asUint8List();
   }
 
   Future<List<String>> _createZoomedQrScanCrops(String path) async {
@@ -239,8 +408,14 @@ class _QrResultSubmissionPageState extends State<QrResultSubmissionPage> {
 
     try {
       final crops = <Rect>[
+        _fractionRect(image, 0.18, 0.02, 0.64, 0.42),
+        _fractionRect(image, 0.22, 0.08, 0.56, 0.40),
+        _fractionRect(image, 0.26, 0.12, 0.48, 0.36),
         _fractionRect(image, 0.00, 0.00, 0.55, 0.65),
+        _fractionRect(image, 0.22, 0.00, 0.56, 0.65),
+        _fractionRect(image, 0.45, 0.00, 0.55, 0.65),
         _fractionRect(image, 0.00, 0.15, 0.55, 0.65),
+        _fractionRect(image, 0.22, 0.15, 0.56, 0.65),
         _fractionRect(image, 0.06, 0.20, 0.42, 0.42),
         _fractionRect(image, 0.10, 0.25, 0.36, 0.36),
         _fractionRect(image, 0.18, 0.12, 0.45, 0.50),
@@ -323,46 +498,132 @@ class _QrResultSubmissionPageState extends State<QrResultSubmissionPage> {
     return tempPath;
   }
 
+  Future<Uint8List?> _createQrPreviewCandidateBytes(Uint8List bytes) async {
+    final codec = await ui.instantiateImageCodec(bytes);
+    final frame = await codec.getNextFrame();
+    final image = frame.image;
+    try {
+      final portrait = image.height >= image.width;
+      final rect =
+          portrait
+              ? _fractionRect(image, 0.18, 0.02, 0.64, 0.42)
+              : _fractionRect(image, 0.12, 0.02, 0.48, 0.60);
+      return _renderCropToBytes(image, rect);
+    } finally {
+      image.dispose();
+    }
+  }
+
   void _showSnackBar(String message) {
     ScaffoldMessenger.of(
       context,
     ).showSnackBar(SnackBar(content: Text(message)));
   }
 
+  Future<void> _showSelectedPhotoPreview({
+    required File? image,
+    required Uint8List? imageBytes,
+  }) {
+    return showDialog<void>(
+      context: context,
+      builder:
+          (context) => Dialog(
+            insetPadding: const EdgeInsets.all(22),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Row(
+                    children: [
+                      const Expanded(
+                        child: Text(
+                          'Selected Test Photo',
+                          style: TextStyle(
+                            color: _UserSubmitColors.navy,
+                            fontWeight: FontWeight.w900,
+                            fontSize: 16,
+                          ),
+                        ),
+                      ),
+                      IconButton(
+                        onPressed: () => Navigator.pop(context),
+                        icon: const Icon(Icons.close_rounded),
+                      ),
+                    ],
+                  ),
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(8),
+                    child: SizedBox(
+                      width: double.infinity,
+                      height: MediaQuery.sizeOf(context).height * 0.46,
+                      child: _FullPhotoImage(
+                        image: image,
+                        imageBytes: imageBytes,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Upload Photo and Submit Result'),
-        centerTitle: true,
-      ),
+      backgroundColor: _UserSubmitColors.page,
       body: SafeArea(
-        child: ListView(
-          padding: const EdgeInsets.all(16),
+        child: Column(
           children: [
-            _buildTestSummary(),
-            const SizedBox(height: 16),
-            _buildPhotoUpload(),
-            const SizedBox(height: 16),
-            _buildQrArea(),
-            const SizedBox(height: 16),
-            _buildResultCards(),
-            const SizedBox(height: 24),
-            ElevatedButton.icon(
-              onPressed: _isSaving ? null : _saveRecord,
-              icon:
-                  _isSaving
-                      ? const SizedBox(
-                        width: 18,
-                        height: 18,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                      : const Icon(Icons.save_alt),
-              label: const Text('Submit Result'),
-              style: ElevatedButton.styleFrom(
-                minimumSize: const Size.fromHeight(52),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(8),
+            const _SubmitTopBar(title: 'Submit Result'),
+            Expanded(
+              child: _AnimatedSubmitBackground(
+                child: ListView(
+                  padding: const EdgeInsets.fromLTRB(16, 16, 16, 28),
+                  children: [
+                    _buildTestSummary(),
+                    const SizedBox(height: 16),
+                    _buildPhotoUpload(),
+                    const SizedBox(height: 16),
+                    _buildQrArea(),
+                    const SizedBox(height: 16),
+                    _buildResultCards(),
+                    const SizedBox(height: 24),
+                    FilledButton.icon(
+                      onPressed: _isSaving ? null : _saveRecord,
+                      icon:
+                          _isSaving
+                              ? const SizedBox(
+                                width: 18,
+                                height: 18,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  color: Colors.white,
+                                ),
+                              )
+                              : const Icon(Icons.save_alt_rounded),
+                      label: const Text('Submit Report'),
+                      style: FilledButton.styleFrom(
+                        minimumSize: const Size.fromHeight(56),
+                        backgroundColor: _UserSubmitColors.blue,
+                        foregroundColor: Colors.white,
+                        disabledBackgroundColor: _UserSubmitColors.border,
+                        disabledForegroundColor: _UserSubmitColors.muted,
+                        textStyle: const TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w900,
+                        ),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ),
@@ -379,33 +640,66 @@ class _QrResultSubmissionPageState extends State<QrResultSubmissionPage> {
         widget.description.isNotEmpty;
 
     return Container(
-      padding: const EdgeInsets.all(14),
+      padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: const Color(0xFFEAF6FF),
+        color: Colors.white.withOpacity(0.82),
         borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: const Color(0xFF9CCCEC)),
+        border: Border.all(color: _UserSubmitColors.blue.withOpacity(0.22)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.04),
+            blurRadius: 14,
+            offset: const Offset(0, 8),
+          ),
+        ],
       ),
-      child: Column(
+      child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            hasFallbackInfo ? widget.name : 'Upload Your Test Kit Photo',
-            style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+          const _SubmitSoftIcon(
+            icon: Icons.info_outline_rounded,
+            color: _UserSubmitColors.blue,
           ),
-          if (widget.code.isNotEmpty) ...[
-            const SizedBox(height: 6),
-            Text('Code: ${widget.code}'),
-          ],
-          if (widget.description.isNotEmpty) ...[
-            const SizedBox(height: 6),
-            Text(widget.description),
-          ],
-          if (!hasFallbackInfo) ...[
-            const SizedBox(height: 6),
-            const Text(
-              'Take or upload a kit photo. If it has a QR code, scan it for kit details; otherwise submit the photo with the selected result.',
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  hasFallbackInfo ? widget.name : 'Upload Your Test Kit Photo',
+                  style: const TextStyle(
+                    color: _UserSubmitColors.navy,
+                    fontSize: 19,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+                if (widget.code.isNotEmpty) ...[
+                  const SizedBox(height: 6),
+                  Text(
+                    'Code: ${widget.code}',
+                    style: const TextStyle(color: _UserSubmitColors.muted),
+                  ),
+                ],
+                if (widget.description.isNotEmpty) ...[
+                  const SizedBox(height: 6),
+                  Text(
+                    widget.description,
+                    style: const TextStyle(color: _UserSubmitColors.muted),
+                  ),
+                ],
+                if (!hasFallbackInfo) ...[
+                  const SizedBox(height: 6),
+                  const Text(
+                    'Take or upload a kit photo, then read the QR code for kit details. QR code is required before submitting.',
+                    style: TextStyle(
+                      color: _UserSubmitColors.muted,
+                      height: 1.35,
+                    ),
+                  ),
+                ],
+              ],
             ),
-          ],
+          ),
         ],
       ),
     );
@@ -416,6 +710,10 @@ class _QrResultSubmissionPageState extends State<QrResultSubmissionPage> {
     if (qrData != null) {
       final kitName =
           qrData.testType.isEmpty ? 'Kit name not found' : qrData.testType;
+      final matchedKitDetails =
+          qrData.extraData['matchedKitDetails'] is Map<String, dynamic>
+              ? qrData.extraData['matchedKitDetails'] as Map<String, dynamic>
+              : const <String, dynamic>{};
       return TweenAnimationBuilder<double>(
         tween: Tween(begin: 0, end: 1),
         duration: const Duration(milliseconds: 420),
@@ -427,14 +725,14 @@ class _QrResultSubmissionPageState extends State<QrResultSubmissionPage> {
           );
         },
         child: Container(
-          padding: const EdgeInsets.all(14),
+          padding: const EdgeInsets.all(16),
           decoration: BoxDecoration(
-            color: Colors.white,
+            color: Colors.white.withOpacity(0.86),
             borderRadius: BorderRadius.circular(8),
-            border: Border.all(color: Colors.green, width: 2),
+            border: Border.all(color: _UserSubmitColors.green, width: 1.5),
             boxShadow: [
               BoxShadow(
-                color: Colors.green.withOpacity(0.18),
+                color: _UserSubmitColors.green.withOpacity(0.14),
                 blurRadius: 20,
                 offset: const Offset(0, 10),
               ),
@@ -445,17 +743,45 @@ class _QrResultSubmissionPageState extends State<QrResultSubmissionPage> {
             children: [
               const Row(
                 children: [
-                  Icon(Icons.qr_code_2, color: Colors.green),
+                  Icon(Icons.qr_code_2, color: _UserSubmitColors.green),
                   SizedBox(width: 8),
                   Text(
                     'Kit Details',
-                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                    style: TextStyle(
+                      color: _UserSubmitColors.navy,
+                      fontSize: 18,
+                      fontWeight: FontWeight.w900,
+                    ),
                   ),
                 ],
               ),
               const SizedBox(height: 10),
+              if (qrData.isKnownKit)
+                const Padding(
+                  padding: EdgeInsets.only(bottom: 6),
+                  child: Chip(
+                    avatar: Icon(Icons.verified_rounded, size: 18),
+                    label: Text('Admin uploaded kit matched'),
+                  ),
+                ),
               _InfoLine(label: 'Kit Name', value: kitName),
               _InfoLine(label: 'Kit ID', value: qrData.kitId),
+              _InfoLine(
+                label: 'Category',
+                value: (matchedKitDetails['category'] ?? '').toString(),
+              ),
+              _InfoLine(
+                label: 'Sample Type',
+                value: (matchedKitDetails['sampleType'] ?? '').toString(),
+              ),
+              _InfoLine(
+                label: 'Manufacturer',
+                value: (matchedKitDetails['manufacturer'] ?? '').toString(),
+              ),
+              _InfoLine(
+                label: 'Description',
+                value: (matchedKitDetails['description'] ?? '').toString(),
+              ),
               const SizedBox(height: 10),
               Align(
                 alignment: Alignment.centerRight,
@@ -463,6 +789,9 @@ class _QrResultSubmissionPageState extends State<QrResultSubmissionPage> {
                   onPressed: _scanQrWithCamera,
                   icon: const Icon(Icons.qr_code_scanner),
                   label: const Text('Scan Again'),
+                  style: TextButton.styleFrom(
+                    foregroundColor: _UserSubmitColors.blue,
+                  ),
                 ),
               ),
             ],
@@ -472,24 +801,35 @@ class _QrResultSubmissionPageState extends State<QrResultSubmissionPage> {
     }
 
     return Container(
-      padding: const EdgeInsets.all(14),
+      padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: const Color(0xFFFFFBFE),
+        color: Colors.white.withOpacity(0.82),
         borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: Colors.grey.shade300),
+        border: Border.all(color: _UserSubmitColors.border),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.04),
+            blurRadius: 14,
+            offset: const Offset(0, 8),
+          ),
+        ],
       ),
       child: Row(
         children: [
-          Icon(
-            _isReadingQr ? Icons.manage_search : Icons.qr_code_scanner,
-            color: Colors.blue,
+          _SubmitSoftIcon(
+            icon: _isReadingQr ? Icons.manage_search : Icons.qr_code_scanner,
+            color: _UserSubmitColors.blue,
           ),
-          const SizedBox(width: 10),
+          const SizedBox(width: 12),
           Expanded(
             child: Text(
               _isReadingQr
                   ? 'Reading QR code from selected photo...'
-                  : 'No QR detected yet. Scan QR if the kit has one, or submit with the kit photo only.',
+                  : 'No QR detected yet. Scan QR or upload a clearer QR photo. QR read is required before submit.',
+              style: const TextStyle(
+                color: _UserSubmitColors.muted,
+                height: 1.35,
+              ),
             ),
           ),
           const SizedBox(width: 10),
@@ -497,6 +837,13 @@ class _QrResultSubmissionPageState extends State<QrResultSubmissionPage> {
             onPressed: _isReadingQr ? null : _scanQrWithCamera,
             icon: const Icon(Icons.center_focus_strong),
             label: const Text('Scan QR'),
+            style: FilledButton.styleFrom(
+              backgroundColor: _UserSubmitColors.blue,
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(999),
+              ),
+            ),
           ),
         ],
       ),
@@ -511,12 +858,12 @@ class _QrResultSubmissionPageState extends State<QrResultSubmissionPage> {
     return AnimatedContainer(
       duration: const Duration(milliseconds: 240),
       curve: Curves.easeOutCubic,
-      padding: const EdgeInsets.all(14),
+      padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: Colors.white.withOpacity(0.86),
         borderRadius: BorderRadius.circular(8),
         border: Border.all(
-          color: hasImage ? Colors.green : Colors.grey.shade300,
+          color: hasImage ? _UserSubmitColors.green : _UserSubmitColors.border,
           width: hasImage ? 2 : 1,
         ),
         boxShadow: [
@@ -532,45 +879,54 @@ class _QrResultSubmissionPageState extends State<QrResultSubmissionPage> {
         children: [
           const Row(
             children: [
-              Icon(Icons.photo_camera_outlined, color: Colors.blue),
+              _SubmitSoftIcon(
+                icon: Icons.photo_camera_outlined,
+                color: _UserSubmitColors.blue,
+                size: 38,
+                iconSize: 20,
+              ),
               SizedBox(width: 8),
               Text(
                 'Test Photo',
-                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                style: TextStyle(
+                  color: _UserSubmitColors.navy,
+                  fontSize: 18,
+                  fontWeight: FontWeight.w900,
+                ),
               ),
             ],
           ),
           const SizedBox(height: 12),
           if (hasImage)
-            ClipRRect(
-              borderRadius: BorderRadius.circular(8),
-              child:
-                  imageBytes != null
-                      ? Image.memory(
-                        imageBytes,
-                        height: 190,
-                        width: double.infinity,
-                        fit: BoxFit.cover,
-                      )
-                      : Image.file(
-                        image!,
-                        height: 190,
-                        width: double.infinity,
-                        fit: BoxFit.cover,
-                      ),
+            _SelectedTestPhotoPreview(
+              image: image,
+              imageBytes: imageBytes,
+              qrCropBytes: _qrCropPreviewBytes ?? _qrCandidatePreviewBytes,
+              onTap:
+                  () => _showSelectedPhotoPreview(
+                    image: image,
+                    imageBytes: imageBytes,
+                  ),
             )
           else
             Container(
               height: 150,
               width: double.infinity,
               decoration: BoxDecoration(
-                color: const Color(0xFFEAF6FF),
+                color: _UserSubmitColors.blue.withOpacity(0.06),
                 borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: const Color(0xFF9CCCEC)),
+                border: Border.all(
+                  color: _UserSubmitColors.blue.withOpacity(0.2),
+                ),
               ),
               child: const Center(
-                child: Text(
-                  'Take a photo with camera or select one from your device.',
+                child: Padding(
+                  padding: EdgeInsets.all(12),
+                  child: Text(
+                    'Take a photo with camera or select one from your device.',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(color: _UserSubmitColors.muted),
+                  ),
                 ),
               ),
             ),
@@ -581,11 +937,13 @@ class _QrResultSubmissionPageState extends State<QrResultSubmissionPage> {
                 onPressed: _isReadingQr ? null : _takePhoto,
                 icon: const Icon(Icons.camera_alt),
                 label: const Text('Take Photo'),
+                style: _submitOutlinedButtonStyle(),
               );
               final selectPhotoButton = OutlinedButton.icon(
                 onPressed: _isReadingQr ? null : _selectPhotoFromDevice,
                 icon: const Icon(Icons.photo_library_outlined),
                 label: const Text('Select Photo'),
+                style: _submitOutlinedButtonStyle(),
               );
 
               if (constraints.maxWidth < 360) {
@@ -619,7 +977,11 @@ class _QrResultSubmissionPageState extends State<QrResultSubmissionPage> {
       children: [
         const Text(
           'Select Result',
-          style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+          style: TextStyle(
+            color: _UserSubmitColors.navy,
+            fontSize: 19,
+            fontWeight: FontWeight.w900,
+          ),
         ),
         const SizedBox(height: 10),
         ..._results.map((result) {
@@ -647,9 +1009,384 @@ class _InfoLine extends StatelessWidget {
 
     return Padding(
       padding: const EdgeInsets.only(top: 4),
-      child: Text('$label: $value'),
+      child: Text.rich(
+        TextSpan(
+          text: '$label: ',
+          style: const TextStyle(
+            color: _UserSubmitColors.navy,
+            fontWeight: FontWeight.w900,
+          ),
+          children: [
+            TextSpan(
+              text: value,
+              style: const TextStyle(
+                color: _UserSubmitColors.muted,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
+}
+
+class _SelectedTestPhotoPreview extends StatelessWidget {
+  const _SelectedTestPhotoPreview({
+    required this.image,
+    required this.imageBytes,
+    required this.qrCropBytes,
+    required this.onTap,
+  });
+
+  final File? image;
+  final Uint8List? imageBytes;
+  final Uint8List? qrCropBytes;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      borderRadius: BorderRadius.circular(8),
+      onTap: onTap,
+      child: Container(
+        height: 230,
+        width: double.infinity,
+        decoration: BoxDecoration(
+          color: _UserSubmitColors.blue.withOpacity(0.04),
+          border: Border.all(color: _UserSubmitColors.blue.withOpacity(0.18)),
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Stack(
+          children: [
+            Positioned.fill(
+              child: Padding(
+                padding: const EdgeInsets.all(8),
+                child: LayoutBuilder(
+                  builder: (context, constraints) {
+                    final compact = constraints.maxWidth < 430;
+                    final fullPhoto = _PhotoPane(
+                      title: 'Full Photo',
+                      child: _FullPhotoImage(
+                        image: image,
+                        imageBytes: imageBytes,
+                      ),
+                    );
+                    final qrPhoto = _PhotoPane(
+                      title: 'QR Area',
+                      child:
+                          qrCropBytes == null
+                              ? const _QrPendingPreview()
+                              : Image.memory(
+                                qrCropBytes!,
+                                fit: BoxFit.contain,
+                                gaplessPlayback: true,
+                                filterQuality: FilterQuality.medium,
+                              ),
+                    );
+
+                    if (compact) {
+                      return Column(
+                        children: [
+                          Expanded(flex: 3, child: fullPhoto),
+                          const SizedBox(height: 8),
+                          Expanded(flex: 2, child: qrPhoto),
+                        ],
+                      );
+                    }
+
+                    return Row(
+                      children: [
+                        Expanded(flex: 3, child: fullPhoto),
+                        const SizedBox(width: 10),
+                        Expanded(flex: 2, child: qrPhoto),
+                      ],
+                    );
+                  },
+                ),
+              ),
+            ),
+            Positioned(
+              right: 10,
+              bottom: 10,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 6),
+                decoration: BoxDecoration(
+                  color: Colors.black.withOpacity(0.58),
+                  borderRadius: BorderRadius.circular(999),
+                ),
+                child: const Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      Icons.touch_app_rounded,
+                      color: Colors.white,
+                      size: 14,
+                    ),
+                    SizedBox(width: 4),
+                    Text(
+                      'Tap to view',
+                      style: TextStyle(color: Colors.white, fontSize: 12),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _FullPhotoImage extends StatelessWidget {
+  const _FullPhotoImage({required this.image, required this.imageBytes});
+
+  final File? image;
+  final Uint8List? imageBytes;
+
+  @override
+  Widget build(BuildContext context) {
+    final bytes = imageBytes;
+    if (bytes != null) {
+      return Image.memory(
+        bytes,
+        fit: BoxFit.contain,
+        gaplessPlayback: true,
+        filterQuality: FilterQuality.medium,
+      );
+    }
+
+    final file = image;
+    if (file != null) {
+      return Image.file(
+        file,
+        fit: BoxFit.contain,
+        gaplessPlayback: true,
+        filterQuality: FilterQuality.medium,
+      );
+    }
+
+    return const Center(
+      child: Text(
+        'No photo selected',
+        style: TextStyle(color: _UserSubmitColors.muted),
+      ),
+    );
+  }
+}
+
+class _PhotoPane extends StatelessWidget {
+  const _PhotoPane({required this.title, required this.child});
+
+  final String title;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      height: double.infinity,
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.72),
+        border: Border.all(color: _UserSubmitColors.blue.withOpacity(0.16)),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Stack(
+        children: [
+          Positioned.fill(
+            child: Padding(padding: const EdgeInsets.all(6), child: child),
+          ),
+          Positioned(
+            left: 8,
+            top: 8,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              decoration: BoxDecoration(
+                color: Colors.black.withOpacity(0.5),
+                borderRadius: BorderRadius.circular(999),
+              ),
+              child: Text(
+                title,
+                style: const TextStyle(color: Colors.white, fontSize: 11),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _QrPendingPreview extends StatelessWidget {
+  const _QrPendingPreview();
+
+  @override
+  Widget build(BuildContext context) {
+    return const Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.qr_code_scanner_rounded, color: _UserSubmitColors.muted),
+          SizedBox(height: 6),
+          Text(
+            'QR area will show here',
+            textAlign: TextAlign.center,
+            style: TextStyle(color: _UserSubmitColors.muted, fontSize: 12),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _QrImageScanResult {
+  const _QrImageScanResult({required this.value, required this.previewBytes});
+
+  final String value;
+  final Uint8List? previewBytes;
+}
+
+class _SubmitTopBar extends StatelessWidget {
+  const _SubmitTopBar({required this.title});
+
+  final String title;
+
+  @override
+  Widget build(BuildContext context) {
+    final compact = MediaQuery.sizeOf(context).width <= 520;
+    return Container(
+      height: compact ? 86 : 104,
+      padding: EdgeInsets.symmetric(horizontal: compact ? 8 : 18),
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [Color(0xFF071B45), Color(0xFF0A2F66)],
+        ),
+      ),
+      child: Row(
+        children: [
+          IconButton(
+            tooltip: 'Back',
+            onPressed: () => Navigator.maybePop(context),
+            icon: const Icon(Icons.arrow_back_rounded, size: 28),
+            color: Colors.white,
+          ),
+          const SizedBox(width: 6),
+          Expanded(
+            child: Text(
+              title,
+              textAlign: TextAlign.center,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: compact ? 22 : 26,
+                fontWeight: FontWeight.w900,
+              ),
+            ),
+          ),
+          const SizedBox(width: 54),
+        ],
+      ),
+    );
+  }
+}
+
+class _AnimatedSubmitBackground extends StatefulWidget {
+  const _AnimatedSubmitBackground({required this.child});
+
+  final Widget child;
+
+  @override
+  State<_AnimatedSubmitBackground> createState() =>
+      _AnimatedSubmitBackgroundState();
+}
+
+class _AnimatedSubmitBackgroundState extends State<_AnimatedSubmitBackground>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller = AnimationController(
+    vsync: this,
+    duration: const Duration(seconds: 7),
+  )..repeat(reverse: true);
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _controller,
+      builder: (context, child) {
+        final value = _controller.value;
+        return DecoratedBox(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment(-0.9 + value * 0.6, -1),
+              end: Alignment(0.8 - value * 0.4, 1),
+              colors: const [
+                Color(0xFFF8FAFD),
+                Color(0xFFEFF7FF),
+                Color(0xFFF7FFFC),
+              ],
+            ),
+          ),
+          child: child,
+        );
+      },
+      child: widget.child,
+    );
+  }
+}
+
+class _SubmitSoftIcon extends StatelessWidget {
+  const _SubmitSoftIcon({
+    required this.icon,
+    required this.color,
+    this.size = 44,
+    this.iconSize = 22,
+  });
+
+  final IconData icon;
+  final Color color;
+  final double size;
+  final double iconSize;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: size,
+      height: size,
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.12),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Icon(icon, color: color, size: iconSize),
+    );
+  }
+}
+
+ButtonStyle _submitOutlinedButtonStyle() {
+  return OutlinedButton.styleFrom(
+    foregroundColor: _UserSubmitColors.blue,
+    side: const BorderSide(color: _UserSubmitColors.blue),
+    minimumSize: const Size.fromHeight(48),
+    textStyle: const TextStyle(fontWeight: FontWeight.w800),
+    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(999)),
+  );
+}
+
+class _UserSubmitColors {
+  static const page = Color(0xFFF4F7FB);
+  static const navy = Color(0xFF111D35);
+  static const muted = Color(0xFF657086);
+  static const border = Color(0xFFE2E6EF);
+  static const blue = Color(0xFF137AC9);
+  static const green = Color(0xFF14976A);
 }
 
 class _LiveQrScannerPage extends StatefulWidget {
@@ -698,43 +1435,141 @@ class _LiveQrScannerPageState extends State<_LiveQrScannerPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: Colors.black,
       appBar: AppBar(title: const Text('Scan Kit QR Code'), centerTitle: true),
-      body: Stack(
-        fit: StackFit.expand,
-        children: [
-          MobileScanner(controller: _controller, onDetect: _handleDetect),
-          Center(
-            child: Container(
-              width: 250,
-              height: 250,
-              decoration: BoxDecoration(
-                border: Border.all(color: Colors.white, width: 3),
-                borderRadius: BorderRadius.circular(8),
-              ),
-            ),
-          ),
-          Positioned(
-            left: 16,
-            right: 16,
-            bottom: 28,
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                color: Colors.black.withOpacity(0.62),
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: const Padding(
-                padding: EdgeInsets.all(12),
-                child: Text(
-                  'Place the QR code inside the box.',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(color: Colors.white, fontSize: 16),
+      body: LayoutBuilder(
+        builder: (context, constraints) {
+          final guideSize = math.min(constraints.maxWidth * 0.78, 290.0);
+          final guideWindow = Rect.fromCenter(
+            center: Offset(constraints.maxWidth / 2, constraints.maxHeight / 2),
+            width: guideSize,
+            height: guideSize,
+          );
+
+          return Stack(
+            fit: StackFit.expand,
+            children: [
+              MobileScanner(controller: _controller, onDetect: _handleDetect),
+              CustomPaint(painter: _ScannerOverlayPainter(guideWindow)),
+              Positioned.fromRect(
+                rect: guideWindow,
+                child: Container(
+                  decoration: BoxDecoration(
+                    border: Border.all(color: Colors.white70, width: 2),
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                  child: Stack(
+                    children: const [
+                      Align(
+                        alignment: Alignment.topCenter,
+                        child: Padding(
+                          padding: EdgeInsets.only(top: 10),
+                          child: Text(
+                            'Auto scan anywhere',
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.w900,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ),
-            ),
-          ),
-        ],
+              Positioned(
+                left: 16,
+                right: 16,
+                bottom: 28,
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    color: Colors.black.withOpacity(0.68),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: Colors.white24),
+                  ),
+                  child: const Padding(
+                    padding: EdgeInsets.all(12),
+                    child: Text(
+                      'Keep the QR code visible anywhere in the camera frame. The app will detect it automatically.',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(color: Colors.white, fontSize: 16),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          );
+        },
       ),
     );
+  }
+}
+
+class _ScannerOverlayPainter extends CustomPainter {
+  const _ScannerOverlayPainter(this.scanWindow);
+
+  final Rect scanWindow;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final cornerPaint =
+        Paint()
+          ..color = _UserSubmitColors.green
+          ..strokeWidth = 5
+          ..style = PaintingStyle.stroke
+          ..strokeCap = StrokeCap.round;
+    const cornerLength = 34.0;
+    final radius = RRect.fromRectAndRadius(
+      scanWindow.deflate(2),
+      const Radius.circular(14),
+    );
+    final rect = radius.outerRect;
+
+    canvas.drawLine(
+      rect.topLeft,
+      rect.topLeft + const Offset(cornerLength, 0),
+      cornerPaint,
+    );
+    canvas.drawLine(
+      rect.topLeft,
+      rect.topLeft + const Offset(0, cornerLength),
+      cornerPaint,
+    );
+    canvas.drawLine(
+      rect.topRight,
+      rect.topRight + const Offset(-cornerLength, 0),
+      cornerPaint,
+    );
+    canvas.drawLine(
+      rect.topRight,
+      rect.topRight + const Offset(0, cornerLength),
+      cornerPaint,
+    );
+    canvas.drawLine(
+      rect.bottomLeft,
+      rect.bottomLeft + const Offset(cornerLength, 0),
+      cornerPaint,
+    );
+    canvas.drawLine(
+      rect.bottomLeft,
+      rect.bottomLeft + const Offset(0, -cornerLength),
+      cornerPaint,
+    );
+    canvas.drawLine(
+      rect.bottomRight,
+      rect.bottomRight + const Offset(-cornerLength, 0),
+      cornerPaint,
+    );
+    canvas.drawLine(
+      rect.bottomRight,
+      rect.bottomRight + const Offset(0, -cornerLength),
+      cornerPaint,
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant _ScannerOverlayPainter oldDelegate) {
+    return oldDelegate.scanWindow != scanWindow;
   }
 }
 
