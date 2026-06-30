@@ -1,75 +1,157 @@
-# ResearchPaper — Flutter data collection & QR submission app
+# Rapid Test
 
-ResearchPaper is a Flutter application that uses Firebase to collect,
-store, and manage dataset records. It includes user registration and
-authentication, QR-based submission flows, an admin console for data
-management, export tools, and ready-to-run Firebase rules and scripts.
+Rapid Test is a Flutter and Firebase app for collecting rapid diagnostic test
+submissions. Users can upload or capture a kit photo, scan/read a QR code,
+select the test result, and submit the record. Admin users can review records,
+filter submissions, view simple reporting summaries, and export dataset data.
+
+## Overview
+
+This project is built for a realistic rapid-test data collection workflow:
+
+- Patients or field users sign in, upload test-kit evidence, and submit results.
+- QR data is parsed from live camera scans or uploaded kit photos.
+- Firestore stores normalized dataset records with test, kit, user, image, and
+  timestamp details.
+- Admin users can inspect submissions, filter by result/date/search terms, and
+  export records for reporting or backup.
+
+## Features
+
+| Icon | Feature | Description |
+| --- | --- | --- |
+| 🔐 | Authentication | Firebase Authentication powers login, signup, forgot-password, and protected user/admin routes. |
+| 🧪 | Rapid Test Submission | Users can create a rapid-test report with kit photo, QR details, and Positive/Negative result selection. |
+| 📷 | Photo Capture & Upload | Uses device camera or gallery uploads through `image_picker`, with preview support before submission. |
+| ▣ | QR Code Reading | Supports live QR scanning with `mobile_scanner` and QR extraction from uploaded images. |
+| 🧾 | Structured Dataset Records | Submissions are saved with record ID, user info, kit data, result, image metadata, and timestamps. |
+| ☁️ | Firebase Backend | Uses Firebase Core, Auth, Cloud Firestore, and Firebase Storage for app data and uploaded images. |
+| 👤 | User Profile | Users can view and update basic profile details and profile photo information. |
+| 📚 | Submission History | Users can browse previous submissions with result status, kit information, timestamps, and attached image preview. |
+| 🛠️ | Admin Dashboard | Admin interface includes dashboard metrics, kit/data entry area, scan records, reports, and profile navigation. |
+| 🔎 | Search & Filters | Admin records can be searched and filtered by result type and date range. |
+| 📊 | Reports View | Includes summary cards and chart-style visualizations for positive/negative dataset activity. |
+| 📤 | Export Tools | Dataset records can be exported as CSV, JSON, or Excel-compatible XLS output. |
+| 🧰 | Export History | Recent exports are tracked locally with delete/remove support where available. |
+| 🛡️ | Security Rules | Firestore and Storage rules are included for Firebase deployment review. |
+| 📱 | Cross-Platform Flutter | Includes Android, iOS, and web project folders generated for Flutter. |
+
+## Tech Stack
+
+- **Framework:** Flutter / Dart
+- **State & Navigation:** GetX plus Flutter routes
+- **Backend:** Firebase Core, Firebase Auth, Cloud Firestore, Firebase Storage
+- **QR Scanning:** `mobile_scanner`
+- **Media Upload:** `image_picker`
+- **Exports:** CSV, JSON, and Excel-compatible HTML/XLS output
+- **Platforms:** Android, iOS, and Web
 
 ## Quick Start
 
-- Install Flutter: https://docs.flutter.dev/get-started
-- Configure Firebase for Android/iOS and add the generated `google-services.json` / `GoogleService-Info.plist` files.
-- From the project root run:
+1. Install Flutter: <https://docs.flutter.dev/get-started>
+2. Configure Firebase for your target platforms.
+3. Add the required Firebase config files:
+   - Android: `android/app/google-services.json`
+   - iOS: `ios/Runner/GoogleService-Info.plist`
+   - Flutter options: `lib/firebase_options.dart`
+4. Install dependencies and run the app:
 
 ```bash
 flutter pub get
 flutter run
 ```
 
-## Project structure (high level)
+## Firebase Setup Notes
 
-- `android/`, `ios/` — platform folders and build configs
-- `lib/` — main Flutter source (models, services, widgets, screens)
-- `assets/` — bundled assets
-- `firestore.rules`, `storage.rules` — security rules for Firebase
-- `reset-password.js` — helper script for password reset flows
-- `pubspec.yaml` — Dart/Flutter dependencies and metadata
+- Review `firestore.rules` and `storage.rules` before deploying to production.
+- Make sure Firebase Authentication providers are enabled in the Firebase
+  Console.
+- Confirm that Firestore collections used by the app match your security rules,
+  especially:
+  - `users`
+  - `dataset_records`
+  - QR kit / kit reference collections used by the admin tools
+- Uploaded kit photos and profile images require Firebase Storage permissions.
 
-## A–Z Features (English)
+## Project Structure
 
-- **A — Admin Console:** A web/mobile admin interface to review and manage dataset records (`lib/All in one/ADMIN/adminConsole.dart`).
-- **B — Backup & Export:** Export data to common formats (CSV/Excel) using the export service (`lib/services/export_service.dart`).
-- **C — Cloud Firestore Integration:** Primary persistent datastore with provided security rules (`firestore.rules`).
-- **D — Dataset Model:** Central data model for records in `lib/models/dataset_record_model.dart`.
-- **E — Email & Auth:** Firebase Authentication for sign-up, login, and protected flows (`lib/All in one/Registrations`).
-- **F — Forms & Validation:** User-facing forms for registration and dataset entry (various `lib/All in one/*` screens).
-- **G — Google/Firebase Configuration:** Project includes `firebase_options.dart` and sample `google-services.json` for quick setup.
-- **H — Hosting Support:** `firebase.json` is included for optional Firebase Hosting configuration and deployment.
-- **I — Image & QR Decoding:** Services to decode images and parse QR codes (`lib/services/qr_image_decoder_*`, `lib/services/qr_parser_service.dart`).
-- **J — JSON Import/Export:** Import and export helpers support JSON as an interchange format.
-- **K — Kotlin Android Tooling:** Android module configured with Kotlin build files under `android/`.
-- **L — Login & Signup Screens:** User flows implemented at `lib/All in one/Registrations/login.dart` and `signup.dart`.
-- **M — Mobile Scanner Integration:** QR scanning using mobile scanner libraries (see `mobile_scanner` dependencies in `pubspec.yaml`).
-- **N — Navigation & Routing:** Standard Flutter navigation patterns used across screens and widgets.
-- **O — Onboarding Screens:** First-run onboarding flows located in the `OnBoard/` folder.
-- **P — Password Reset Script:** `reset-password.js` helper script to trigger password resets or related admin tasks.
-- **Q — QR Submission Flow:** QR result submission UI (`lib/All in one/qr_result_submission_page.dart`) and parsing services.
-- **R — Rules (Security):** Firestore and Storage security rules included and ready for review (`firestore.rules`, `storage.rules`).
-- **S — Firebase Storage:** Support for storing assets and submission media (storage rules provided).
-- **T — Tests:** Basic widget test scaffold in `test/widget_test.dart` to start test coverage.
-- **U — Utilities:** Reusable utility functions in `lib/utils/` for common tasks.
-- **V — Versioned Dependencies:** `pubspec.lock` and `pubspec.yaml` track packages and versions used.
-- **W — Widgets Library:** Reusable UI components in `lib/Widgets/` for consistent design.
-- **X — eXport Formats:** Export service supports common export formats (CSV/Excel/JSON) for reporting and backup.
-- **Y — YAML Configuration:** Analysis and dependency configuration via `analysis_options.yaml` and `pubspec.yaml`.
-- **Z — ZIP / Archive Support:** Export tools can package export files into archives for download or transfer.
+```text
+android/                         Android platform project
+ios/                             iOS platform project
+web/                             Flutter web assets and manifest
+assets/                          App images and rapid-test visual assets
+lib/main.dart                    App bootstrap, Firebase init, and routes
+lib/firebase_options.dart        Firebase platform options
+lib/All in one/                  Main user, admin, auth, and submission screens
+lib/All in one/ADMIN/            Admin login, dashboard, reports, and exports UI
+lib/All in one/Registrations/    Login, signup, and forgot-password screens
+lib/models/                      Dataset record model
+lib/services/                    Database, export, QR parser, and platform helpers
+lib/widgets/                     Shared UI widgets
+test/                            Flutter test scaffold
+firestore.rules                  Firestore security rules
+storage.rules                    Firebase Storage security rules
+reset-password.js                Password reset helper script
+```
 
-## Deployment notes
+## Important Files
 
-- Review and adapt `firestore.rules` and `storage.rules` before deploying to production.
-- Set real Firebase project values in the platform config files and `firebase_options.dart`.
+- `lib/All in one/qr_result_submission_page.dart` - rapid-test photo upload, QR
+  scan/read, result selection, and record submission flow.
+- `lib/All in one/TestsFiles.dart` - authenticated user home, submission history,
+  and profile experience.
+- `lib/All in one/ADMIN/adminConsole.dart` - admin dashboard, filters, reports,
+  exports, and recent export history.
+- `lib/services/database_service.dart` - Firestore and Storage operations.
+- `lib/services/export_service.dart` - CSV, JSON, and XLS export generation.
+- `lib/services/qr_parser_service.dart` - QR payload parsing and known test-type
+  detection.
+- `lib/models/dataset_record_model.dart` - normalized dataset record structure.
+
+## Available Commands
+
+```bash
+flutter pub get
+flutter analyze
+flutter test
+flutter run
+flutter build apk
+flutter build web
+```
+
+## Deployment
+
+For Firebase deployment, verify the active project first:
+
+```bash
+firebase use
+firebase deploy --only firestore:rules,storage
+```
+
+For Flutter web hosting, build the web app before deploying:
+
+```bash
+flutter build web
+firebase deploy --only hosting
+```
 
 ## Contributing
 
-If you want to contribute, please:
+1. Fork the repository.
+2. Create a feature branch.
+3. Make focused changes and add tests where useful.
+4. Run analysis/tests before opening a pull request.
+5. Describe the user-facing change and any Firebase rule or config impact.
 
-1. Fork the repository and create a feature branch
-2. Make changes and add tests where appropriate
-3. Open a pull request describing your changes
+## Support
 
-## Contact / Support
+Open a GitHub issue with:
 
-If you run into issues, open an issue on the GitHub repository with steps to reproduce and relevant logs.
+- Steps to reproduce
+- Expected behavior
+- Actual behavior
+- Device/platform details
+- Relevant logs or screenshots
 
 ---
-Updated README: concise project description and full A–Z features list.
+Updated README with the detailed Rapid Test project description provided by the user.
