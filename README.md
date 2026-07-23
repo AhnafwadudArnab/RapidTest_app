@@ -19,6 +19,33 @@ This project is built for a realistic rapid-test data collection workflow:
   result/date/search terms, update review status, and export records for
   reporting or backup.
 
+## Project Preview
+
+<table>
+  <tr>
+    <td align="center">
+      <img src="assets/onboard1.png" alt="Rapid test onboarding illustration" width="220">
+      <br>
+      <sub>Rapid test workflow</sub>
+    </td>
+    <td align="center">
+      <img src="assets/onboard2.png" alt="Dataset extraction onboarding illustration" width="220">
+      <br>
+      <sub>Dataset extraction</sub>
+    </td>
+    <td align="center">
+      <img src="assets/kk/RDT-Antigen-Results.png" alt="Rapid antigen test result samples" width="220">
+      <br>
+      <sub>Result evidence</sub>
+    </td>
+    <td align="center">
+      <img src="assets/kk/covid19.jpg" alt="COVID-19 rapid test kit" width="220">
+      <br>
+      <sub>Test kit reference</sub>
+    </td>
+  </tr>
+</table>
+
 ## Features
 
 | Icon | Feature | Description |
