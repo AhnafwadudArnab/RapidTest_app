@@ -33,7 +33,13 @@ migrate_working_dir/
 .pub/
 /build/
 node_modules/
+.venv/
 serviceAccountKey.json
+
+# Generated demo/video assets
+video_samples/
+Rapid_test*_voiceover*.mp4
+rapid_test_voiceover*.wav
 
 # Symbolication related
 app.*.symbols
