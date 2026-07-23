@@ -25,12 +25,12 @@ class MyFirebaseAuth {
       return userCredential.user;
     } on FirebaseAuthException catch (e) {
       if (kDebugMode) {
-        print('Error: ${e.message}');
+        debugPrint('Error: ${e.message}');
       }
       return null;
     } catch (e) {
       if (kDebugMode) {
-        print('Error: $e');
+        debugPrint('Error: $e');
       }
       return null;
     }
@@ -41,7 +41,7 @@ class MyFirebaseAuth {
       await _auth.signOut();
     } catch (e) {
       if (kDebugMode) {
-        print('Error: $e');
+        debugPrint('Error: $e');
       }
     }
   }
@@ -51,11 +51,11 @@ class MyFirebaseAuth {
       await _auth.sendPasswordResetEmail(email: email);
     } on FirebaseAuthException catch (e) {
       if (kDebugMode) {
-        print('Error: ${e.message}');
+        debugPrint('Error: ${e.message}');
       }
     } catch (e) {
       if (kDebugMode) {
-        print('Error: $e');
+        debugPrint('Error: $e');
       }
     }
   }

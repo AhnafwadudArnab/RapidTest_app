@@ -10,16 +10,24 @@ service firebase.storage {
       return signedIn() && request.auth.uid == userId;
     }
 
+    function isConfiguredAdmin() {
+      return signedIn() && request.auth.token.email == 'admin_cse@rptest.com';
+    }
+
     function isAdmin() {
       return signedIn()
-        && firestore.exists(/databases/(default)/documents/users/$(request.auth.uid))
-        && firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.role == 'admin';
+        && (
+          isConfiguredAdmin()
+          || (
+            firestore.exists(/databases/(default)/documents/users/$(request.auth.uid))
+            && firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.role == 'admin'
+          )
+        );
     }
 
     match /qr_kit_images/{kitId}/{fileName} {
       allow write: if isAdmin()
         && request.resource != null
-        && request.resource.size < 5 * 1024 * 1024
         && request.resource.contentType.matches('image/.*');
       allow read: if signedIn();
       allow delete: if isAdmin();

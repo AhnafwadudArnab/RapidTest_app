@@ -33,6 +33,14 @@ service cloud.firestore {
         );
     }
 
+    function validChangedString(field, maxLength) {
+      return !request.resource.data.diff(resource.data).affectedKeys().hasAny([field])
+        || (
+          request.resource.data[field] is string
+          && request.resource.data[field].size() <= maxLength
+        );
+    }
+
     function validDatasetCreate(recordDocId) {
       return request.resource.data.keys().hasOnly([
           'recordId',
@@ -100,9 +108,9 @@ service cloud.firestore {
         && validDatasetString('kitSampleType', 120)
         && validDatasetString('kitManufacturer', 160)
         && validDatasetString('kitDescription', 500)
-        && validDatasetString('kitQrImageUrl', 1200)
+        && validDatasetString('kitQrImageUrl', 750000)
         && validDatasetString('kitQrImageName', 260)
-        && validDatasetString('imageUrl', 1200)
+        && validDatasetString('imageUrl', 750000)
         && validDatasetString('imageName', 260)
         && validDatasetString('imageStoragePath', 500)
         && validDatasetString('imageUploadError', 500)
@@ -157,8 +165,71 @@ service cloud.firestore {
     }
 
     function validUserProfileUpdate() {
-      return validUserProfileFields()
-        && (!('role' in resource.data) || resource.data.role == request.resource.data.role);
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'name',
+          'usernameLower',
+          'email',
+          'phone',
+          'bloodGroup',
+          'bio',
+          'address',
+          'profilePhotoUrl',
+          'profilePhotoStoragePath',
+          'role',
+          'createdAt',
+          'updatedAt'
+        ])
+        && (
+          !request.resource.data.diff(resource.data).affectedKeys().hasAny(['role'])
+          || !('role' in resource.data)
+          || resource.data.role == request.resource.data.role
+        )
+        && (!('role' in request.resource.data) || request.resource.data.role == 'user')
+        && validChangedString('name', 120)
+        && validChangedString('usernameLower', 120)
+        && validChangedString('email', 180)
+        && validChangedString('phone', 40)
+        && validChangedString('bloodGroup', 20)
+        && validChangedString('bio', 500)
+        && validChangedString('address', 500)
+        && validChangedString('profilePhotoUrl', 1200)
+        && validChangedString('profilePhotoStoragePath', 500)
+        && (
+          !request.resource.data.diff(resource.data).affectedKeys().hasAny(['createdAt'])
+          || request.resource.data.createdAt is timestamp
+        )
+        && (
+          !request.resource.data.diff(resource.data).affectedKeys().hasAny(['updatedAt'])
+          || request.resource.data.updatedAt is timestamp
+        );
+    }
+    function validAdminProfileFields() {
+      return request.resource.data.keys().hasOnly([
+          'name',
+          'usernameLower',
+          'email',
+          'phone',
+          'bloodGroup',
+          'bio',
+          'address',
+          'profilePhotoUrl',
+          'profilePhotoStoragePath',
+          'role',
+          'createdAt',
+          'updatedAt'
+        ])
+        && request.resource.data.role == 'admin'
+        && validDatasetString('name', 120)
+        && validDatasetString('usernameLower', 120)
+        && validDatasetString('email', 180)
+        && validDatasetString('phone', 40)
+        && validDatasetString('bloodGroup', 20)
+        && validDatasetString('bio', 500)
+        && validDatasetString('address', 500)
+        && validDatasetString('profilePhotoUrl', 1200)
+        && validDatasetString('profilePhotoStoragePath', 500)
+        && (!('createdAt' in request.resource.data) || request.resource.data.createdAt is timestamp)
+        && (!('updatedAt' in request.resource.data) || request.resource.data.updatedAt is timestamp);
     }
 
     function validQrKitFields() {
@@ -194,7 +265,7 @@ service cloud.firestore {
         && validDatasetString('sampleType', 120)
         && validDatasetString('manufacturer', 160)
         && validDatasetString('description', 500)
-        && validDatasetString('qrImageUrl', 1200)
+        && validDatasetString('qrImageUrl', 750000)
         && validDatasetString('qrImageName', 260)
         && validDatasetString('qrImageStoragePath', 500)
         && (!('createdAt' in request.resource.data) || request.resource.data.createdAt is timestamp)
@@ -206,13 +277,13 @@ service cloud.firestore {
         && validUserProfileFields();
       allow create: if isOwner(userId)
         && isConfiguredAdmin()
-        && request.resource.data.role == 'admin';
+        && validAdminProfileFields();
       allow read: if isOwner(userId) || isAdmin();
       allow update: if isOwner(userId)
         && validUserProfileUpdate();
       allow update: if isOwner(userId)
         && isConfiguredAdmin()
-        && request.resource.data.role == 'admin';
+        && validAdminProfileFields();
       allow update, delete: if isAdmin();
     }
 

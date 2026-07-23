@@ -94,56 +94,89 @@ class _AdminLoginFormState extends State<AdminLoginForm> {
     final username = usernameController.text.trim();
     final password = passwordController.text;
 
-    final isAdmin = await _isAdmin(username, password);
+    try {
+      final isAdmin = await _isAdmin(username, password);
+      if (!context.mounted) return;
 
-    if (isAdmin) {
+      if (isAdmin) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('Login successful!')));
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(builder: (context) => const AddTestsWidget()),
+        );
+      } else {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('Invalid admin account')));
+      }
+    } on FirebaseAuthException catch (e) {
+      if (!context.mounted) return;
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(const SnackBar(content: Text('Login successful!')));
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(builder: (context) => const AddTestsWidget()),
+      ).showSnackBar(SnackBar(content: Text(_adminAuthErrorMessage(e))));
+    } on FirebaseException catch (e) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Admin login failed: ${e.message ?? e.code}')),
       );
-    } else {
+    } catch (e) {
+      if (!context.mounted) return;
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(const SnackBar(content: Text('Invalid admin account')));
+      ).showSnackBar(SnackBar(content: Text('Admin login failed: $e')));
     }
   }
 
   Future<bool> _isAdmin(String email, String password) async {
-    try {
-      final credential = await FirebaseAuth.instance.signInWithEmailAndPassword(
-        email: email,
-        password: password,
-      );
-      final user = credential.user;
-      if (user == null) return false;
+    if (email.toLowerCase() != _adminEmail) return false;
 
-      final doc =
-          await FirebaseFirestore.instance
-              .collection('users')
-              .doc(user.uid)
-              .get();
-      final isAdmin = doc.data()?['role'] == 'admin';
-      final isConfiguredAdmin = user.email?.toLowerCase() == _adminEmail;
+    final credential = await FirebaseAuth.instance.signInWithEmailAndPassword(
+      email: email,
+      password: password,
+    );
+    final user = credential.user;
+    if (user == null) return false;
 
-      if (isConfiguredAdmin && !isAdmin) {
-        await FirebaseFirestore.instance.collection('users').doc(user.uid).set({
-          'name': doc.data()?['name'] ?? user.displayName ?? 'Admin',
-          'email': user.email ?? email,
-          'role': 'admin',
-          'createdAt': doc.data()?['createdAt'] ?? FieldValue.serverTimestamp(),
-          'updatedAt': FieldValue.serverTimestamp(),
-        }, SetOptions(merge: true));
-        return true;
-      }
-      if (!isAdmin) {
-        await FirebaseAuth.instance.signOut();
-      }
-      return isAdmin;
-    } catch (_) {
-      return false;
+    final doc =
+        await FirebaseFirestore.instance
+            .collection('users')
+            .doc(user.uid)
+            .get();
+    final data = doc.data();
+    final isAdmin = data?['role'] == 'admin';
+    final isConfiguredAdmin = user.email?.toLowerCase() == _adminEmail;
+
+    if (isConfiguredAdmin && !isAdmin) {
+      await FirebaseFirestore.instance.collection('users').doc(user.uid).set({
+        'name': data?['name'] ?? user.displayName ?? 'Admin',
+        'email': user.email ?? email,
+        'role': 'admin',
+        'createdAt': data?['createdAt'] ?? FieldValue.serverTimestamp(),
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+      await user.getIdToken(true);
+      return true;
+    }
+    if (!isAdmin) {
+      await FirebaseAuth.instance.signOut();
+    }
+    return isAdmin;
+  }
+
+  String _adminAuthErrorMessage(FirebaseAuthException e) {
+    switch (e.code) {
+      case 'invalid-credential':
+      case 'wrong-password':
+      case 'user-not-found':
+        return 'Invalid admin email or password.';
+      case 'user-disabled':
+        return 'This admin account is disabled.';
+      case 'network-request-failed':
+        return 'Network error. Check your connection and try again.';
+      default:
+        return 'Admin login failed: ${e.message ?? e.code}';
     }
   }
 

@@ -5,7 +5,6 @@ import 'package:get/get.dart';
 import 'package:myproject/All%20in%20one/Registrations/forgetpass.dart';
 import 'package:myproject/All%20in%20one/Registrations/login.dart';
 import 'package:myproject/All%20in%20one/Registrations/signup.dart';
-import 'package:myproject/All%20in%20one/TestsFiles.dart' show Testsfiles;
 import 'package:myproject/All%20in%20one/ADMIN/adminLogin.dart';
 import 'package:myproject/OnBoard/frontpage.dart';
 import 'firebase_options.dart';
@@ -54,22 +53,32 @@ class MyApp extends StatelessWidget {
   }
 }
 
-class AuthGate extends StatelessWidget {
+class AuthGate extends StatefulWidget {
   const AuthGate({super.key});
 
   @override
+  State<AuthGate> createState() => _AuthGateState();
+}
+
+class _AuthGateState extends State<AuthGate> {
+  late final Future<void> _clearSavedSession = _signOutSavedUser();
+
+  Future<void> _signOutSavedUser() async {
+    final auth = FirebaseAuth.instance;
+    if (auth.currentUser != null) {
+      await auth.signOut();
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
-    return StreamBuilder<User?>(
-      stream: FirebaseAuth.instance.authStateChanges(),
+    return FutureBuilder<void>(
+      future: _clearSavedSession,
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) {
           return const Scaffold(
             body: Center(child: CircularProgressIndicator()),
           );
-        }
-
-        if (snapshot.hasData) {
-          return const Testsfiles();
         }
 
         return const Onboard();

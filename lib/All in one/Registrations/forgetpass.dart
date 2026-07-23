@@ -81,8 +81,7 @@ class ForgetPasswordFormWidget extends StatefulWidget {
   const ForgetPasswordFormWidget({super.key});
 
   @override
-  // ignore: library_private_types_in_public_api
-  _ForgetPasswordFormWidgetState createState() =>
+  State<ForgetPasswordFormWidget> createState() =>
       _ForgetPasswordFormWidgetState();
 }
 
@@ -198,7 +197,7 @@ class _ForgetPasswordFormWidgetState extends State<ForgetPasswordFormWidget> {
       );
     } on FirebaseAuthException catch (e) {
       if (kDebugMode) {
-        print('Error: ${e.message}');
+        debugPrint('Error: ${e.message}');
       }
       Get.snackbar(
         'Error',
@@ -209,7 +208,7 @@ class _ForgetPasswordFormWidgetState extends State<ForgetPasswordFormWidget> {
       );
     } catch (e) {
       if (kDebugMode) {
-        print('Error: $e');
+        debugPrint('Error: $e');
       }
       Get.snackbar(
         'Error',

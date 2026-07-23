@@ -281,7 +281,11 @@ class LoginFormWidgetState extends State<LoginFormWidget> {
             .doc(_normalizeUsername(value))
             .get();
     final email = usernameDoc.data()?['email'];
-    return email is String ? email.trim() : null;
+    if (email is String && email.trim().isNotEmpty) {
+      return email.trim();
+    }
+
+    return '${_normalizeUsername(value)}@gmail.com';
   }
 
   String _normalizeUsername(String value) {

@@ -1,3 +1,6 @@
+import 'dart:convert';
+import 'dart:ui' as ui;
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_storage/firebase_storage.dart';
@@ -63,7 +66,7 @@ class _TestsfilesState extends State<Testsfiles>
       Get.offAll(() => const Onboard());
     } catch (e) {
       if (kDebugMode) {
-        print('Error: $e');
+        debugPrint('Error: $e');
       }
     }
   }
@@ -698,11 +701,13 @@ class _UserProfilePageState extends State<_UserProfilePage> {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null || _isUploadingPhoto) return;
 
+    final previousPreviewBytes = _profilePhotoPreviewBytes;
     try {
       final pickedFile = await _imagePicker.pickImage(
         source: ImageSource.gallery,
         imageQuality: 82,
         maxWidth: 900,
+        maxHeight: 900,
       );
       if (pickedFile == null) return;
 
@@ -739,10 +744,21 @@ class _UserProfilePageState extends State<_UserProfilePage> {
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(const SnackBar(content: Text('Profile photo updated.')));
-    } catch (_) {
+    } on FirebaseException catch (e) {
       if (!mounted) return;
+      setState(() => _profilePhotoPreviewBytes = previousPreviewBytes);
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Could not upload profile photo.')),
+        SnackBar(
+          content: Text(
+            'Could not upload profile photo: ${e.message ?? e.code}',
+          ),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _profilePhotoPreviewBytes = previousPreviewBytes);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not upload profile photo: $e')),
       );
     } finally {
       if (mounted) setState(() => _isUploadingPhoto = false);
@@ -778,10 +794,10 @@ class _UserProfilePageState extends State<_UserProfilePage> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const _SectionTitle(
-          title: 'Profile',
-          subtitle: 'Manage your account information.',
-        ),
+        // const _SectionTitle(
+        //   title: 'Profile',
+        //   subtitle: 'Manage your account information.',
+        // ),
         const SizedBox(height: 16),
         _UserPanel(
           child: Column(
@@ -953,6 +969,8 @@ class _SubmissionCard extends StatelessWidget {
                   children: [
                     Text(
                       record.kitDisplayName,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
                       style: const TextStyle(
                         color: _UserColors.navy,
                         fontSize: 17,
@@ -974,7 +992,6 @@ class _SubmissionCard extends StatelessWidget {
             spacing: 8,
             runSpacing: 8,
             children: [
-              _StatusChip(label: record.reviewStatus, color: _UserColors.blue),
               _StatusChip(
                 label: record.selectedResult,
                 color:
@@ -985,10 +1002,7 @@ class _SubmissionCard extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 12),
-          _InfoLine(label: 'Selected Result', value: record.selectedResult),
-          if (record.kitId.isNotEmpty)
-            _InfoLine(label: 'Kit ID', value: record.kitId),
-          _InfoLine(label: 'Kit Name', value: record.kitDisplayName),
+          _SubmissionDetailsWithPhoto(record: record),
           if (record.kitCategory.isNotEmpty)
             _InfoLine(label: 'Category', value: record.kitCategory),
           if (record.kitSampleType.isNotEmpty)
@@ -997,24 +1011,65 @@ class _SubmissionCard extends StatelessWidget {
             _InfoLine(label: 'Manufacturer', value: record.kitManufacturer),
           if (record.kitDescription.isNotEmpty)
             _InfoLine(label: 'Description', value: record.kitDescription),
-          if (record.imageUrl.isNotEmpty) ...[
-            const SizedBox(height: 12),
-            ClipRRect(
-              borderRadius: BorderRadius.circular(8),
-              child: Image.network(
-                record.imageUrl,
-                height: 150,
-                width: double.infinity,
-                fit: BoxFit.cover,
-                errorBuilder: (_, __, ___) => const _InlineImageFallback(),
-              ),
-            ),
-          ] else if (record.imageName.isNotEmpty) ...[
-            const SizedBox(height: 10),
-            const _InlineImageFallback(),
-          ],
         ],
       ),
+    );
+  }
+}
+
+class _SubmissionDetailsWithPhoto extends StatelessWidget {
+  const _SubmissionDetailsWithPhoto({required this.record});
+
+  final DatasetRecordModel record;
+
+  @override
+  Widget build(BuildContext context) {
+    final hasPhoto = record.imageUrl.isNotEmpty || record.imageName.isNotEmpty;
+    final details = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _InfoLine(label: 'Selected Result', value: record.selectedResult),
+        _InfoLine(
+          label: 'Kit ID',
+          value: record.kitId.isEmpty ? 'Not provided' : record.kitId,
+        ),
+        _InfoLine(label: 'Kit Name', value: record.kitDisplayName),
+      ],
+    );
+
+    if (!hasPhoto) return details;
+
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Expanded(child: details),
+        const SizedBox(width: 10),
+        _SubmissionPhotoThumb(record: record),
+      ],
+    );
+  }
+}
+
+class _SubmissionPhotoThumb extends StatelessWidget {
+  const _SubmissionPhotoThumb({required this.record});
+
+  final DatasetRecordModel record;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 104,
+      height: 96,
+      decoration: BoxDecoration(
+        color: _UserColors.blue.withOpacity(0.06),
+        border: Border.all(color: _UserColors.blue.withOpacity(0.14)),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child:
+          record.imageUrl.isEmpty
+              ? const _InlineImageFallback(compact: true)
+              : _recordThumbnailImage(record.imageUrl),
     );
   }
 }
@@ -1073,33 +1128,41 @@ class _UserBottomNav extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        color: Colors.white,
-        border: const Border(top: BorderSide(color: _UserColors.border)),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.06),
-            blurRadius: 18,
-            offset: const Offset(0, -6),
-          ),
-        ],
-      ),
-      child: SafeArea(
-        top: false,
-        child: SizedBox(
-          height: 72,
-          child: Row(
-            children: [
-              for (final entry in pages.indexed)
-                Expanded(
-                  child: _UserBottomNavItem(
-                    page: entry.$2,
-                    selected: entry.$1 == selectedIndex,
-                    onTap: () => onSelected(entry.$1),
-                  ),
+    return SafeArea(
+      top: false,
+      minimum: const EdgeInsets.fromLTRB(14, 0, 14, 10),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(24),
+        child: BackdropFilter(
+          filter: ui.ImageFilter.blur(sigmaX: 18, sigmaY: 18),
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(0.76),
+              borderRadius: BorderRadius.circular(24),
+              border: Border.all(color: Colors.white.withOpacity(0.58)),
+              boxShadow: [
+                BoxShadow(
+                  color: _UserColors.navy.withOpacity(0.14),
+                  blurRadius: 28,
+                  offset: const Offset(0, 12),
                 ),
-            ],
+              ],
+            ),
+            child: SizedBox(
+              height: 72,
+              child: Row(
+                children: [
+                  for (final entry in pages.indexed)
+                    Expanded(
+                      child: _UserBottomNavItem(
+                        page: entry.$2,
+                        selected: entry.$1 == selectedIndex,
+                        onTap: () => onSelected(entry.$1),
+                      ),
+                    ),
+                ],
+              ),
+            ),
           ),
         ),
       ),
@@ -1121,27 +1184,70 @@ class _UserBottomNavItem extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final color = selected ? _UserColors.blue : const Color(0xFF606A80);
-    return InkWell(
-      onTap: onTap,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 180),
-        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(page.icon, color: color, size: selected ? 26 : 24),
-            const SizedBox(height: 5),
-            Text(
-              page.name,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                color: color,
-                fontSize: 12,
-                fontWeight: selected ? FontWeight.w900 : FontWeight.w600,
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        child: SizedBox.expand(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              AnimatedContainer(
+                duration: const Duration(milliseconds: 130),
+                curve: Curves.easeOutCubic,
+                width: 34,
+                height: 30,
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  gradient:
+                      selected
+                          ? const LinearGradient(
+                            begin: Alignment.topLeft,
+                            end: Alignment.bottomRight,
+                            colors: [Color(0xFF1E90FF), Color(0xFF8D5CF6)],
+                          )
+                          : null,
+                  color: selected ? null : Colors.transparent,
+                  borderRadius: BorderRadius.circular(11),
+                  boxShadow:
+                      selected
+                          ? [
+                            BoxShadow(
+                              color: _UserColors.blue.withOpacity(0.22),
+                              blurRadius: 10,
+                              offset: const Offset(0, 4),
+                            ),
+                          ]
+                          : null,
+                ),
+                child: AnimatedScale(
+                  scale: selected ? 1.0 : 0.92,
+                  duration: const Duration(milliseconds: 120),
+                  curve: Curves.easeOutCubic,
+                  child: Icon(
+                    page.icon,
+                    color: selected ? Colors.white : color,
+                    size: 23,
+                  ),
+                ),
               ),
-            ),
-          ],
+              const SizedBox(height: 3),
+              AnimatedDefaultTextStyle(
+                duration: const Duration(milliseconds: 120),
+                curve: Curves.easeOutCubic,
+                style: TextStyle(
+                  color: color,
+                  fontSize: 12,
+                  fontWeight: selected ? FontWeight.w800 : FontWeight.w600,
+                ),
+                child: Text(
+                  page.name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -1532,25 +1638,69 @@ class _ProfileDetail extends StatelessWidget {
   }
 }
 
+Widget _recordThumbnailImage(String imageUrl) {
+  final dataUrlBytes = _imageBytesFromDataUrl(imageUrl);
+  if (dataUrlBytes != null) {
+    return Image.memory(
+      dataUrlBytes,
+      width: double.infinity,
+      height: double.infinity,
+      fit: BoxFit.cover,
+      gaplessPlayback: true,
+    );
+  }
+  return Image.network(
+    imageUrl,
+    width: double.infinity,
+    height: double.infinity,
+    fit: BoxFit.cover,
+    errorBuilder: (_, __, ___) => const _InlineImageFallback(compact: true),
+  );
+}
+
+Uint8List? _imageBytesFromDataUrl(String value) {
+  final commaIndex = value.indexOf(',');
+  if (!value.startsWith('data:image/') || commaIndex < 0) return null;
+  try {
+    return base64Decode(value.substring(commaIndex + 1));
+  } catch (_) {
+    return null;
+  }
+}
+
 class _InlineImageFallback extends StatelessWidget {
-  const _InlineImageFallback();
+  const _InlineImageFallback({this.compact = false});
+
+  final bool compact;
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.all(12),
+      padding: EdgeInsets.all(compact ? 6 : 12),
       decoration: BoxDecoration(
         color: _UserColors.blue.withOpacity(0.06),
         border: Border.all(color: _UserColors.blue.withOpacity(0.14)),
         borderRadius: BorderRadius.circular(8),
       ),
-      child: const Row(
-        children: [
-          Icon(Icons.image_outlined, size: 18, color: _UserColors.blue),
-          SizedBox(width: 8),
-          Text('Photo attached', style: TextStyle(color: _UserColors.muted)),
-        ],
-      ),
+      child:
+          compact
+              ? const Center(
+                child: Icon(
+                  Icons.image_outlined,
+                  size: 24,
+                  color: _UserColors.blue,
+                ),
+              )
+              : const Row(
+                children: [
+                  Icon(Icons.image_outlined, size: 18, color: _UserColors.blue),
+                  SizedBox(width: 8),
+                  Text(
+                    'Photo attached',
+                    style: TextStyle(color: _UserColors.muted),
+                  ),
+                ],
+              ),
     );
   }
 }

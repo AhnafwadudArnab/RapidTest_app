@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
 import 'dart:ui' as ui;
@@ -47,7 +48,6 @@ class _QrResultSubmissionPageState extends State<QrResultSubmissionPage> {
   File? _selectedImage;
   Uint8List? _selectedImageBytes;
   String? _selectedImageName;
-  Uint8List? _qrCropPreviewBytes;
   Uint8List? _qrCandidatePreviewBytes;
   String? _selectedResult;
   bool _isReadingQr = false;
@@ -66,10 +66,6 @@ class _QrResultSubmissionPageState extends State<QrResultSubmissionPage> {
     final imageFile = _selectedImage;
     final imageBytes = _selectedImageBytes;
     final imageName = _selectedImageName;
-    if (imageFile == null && imageBytes == null) {
-      _showSnackBar('Take or upload a kit photo before submitting.');
-      return;
-    }
     if (qrData == null) {
       _showSnackBar('QR code must be read before submitting.');
       return;
@@ -142,7 +138,6 @@ class _QrResultSubmissionPageState extends State<QrResultSubmissionPage> {
     if (!mounted) return;
     setState(() {
       _qrData = qrData;
-      _qrCropPreviewBytes = null;
     });
     _showSnackBar('QR code scanned.');
   }
@@ -151,8 +146,8 @@ class _QrResultSubmissionPageState extends State<QrResultSubmissionPage> {
     try {
       final pickedFile = await _imagePicker.pickImage(
         source: source,
-        imageQuality: 75,
-        maxWidth: 1600,
+        imageQuality: 60,
+        maxWidth: 900,
         preferredCameraDevice: CameraDevice.rear,
       );
       if (pickedFile == null) return;
@@ -165,7 +160,6 @@ class _QrResultSubmissionPageState extends State<QrResultSubmissionPage> {
         _selectedImage = kIsWeb ? null : File(pickedFile.path);
         _selectedImageBytes = imageBytes;
         _selectedImageName = pickedFile.name;
-        _qrCropPreviewBytes = null;
         _qrCandidatePreviewBytes = qrCandidatePreviewBytes;
       });
       if (kIsWeb) {
@@ -202,7 +196,6 @@ class _QrResultSubmissionPageState extends State<QrResultSubmissionPage> {
       if (!mounted) return;
       setState(() {
         _qrData = qrData;
-        _qrCropPreviewBytes = scanResult.previewBytes;
         _qrCandidatePreviewBytes = scanResult.previewBytes;
       });
       _showSnackBar('QR code read from photo.');
@@ -234,10 +227,7 @@ class _QrResultSubmissionPageState extends State<QrResultSubmissionPage> {
 
       final qrData = await _parseQrData(value);
       if (!mounted) return;
-      setState(() {
-        _qrData = qrData;
-        _qrCropPreviewBytes = candidateBytes;
-      });
+      setState(() => _qrData = qrData);
       _showSnackBar('QR code read from photo.');
     } catch (e) {
       if (mounted) _showSnackBar('Could not read QR from photo: $e');
@@ -666,7 +656,7 @@ class _QrResultSubmissionPageState extends State<QrResultSubmissionPage> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  hasFallbackInfo ? widget.name : 'Upload Your Test Kit Photo',
+                  hasFallbackInfo ? widget.name : 'Scan Test Kit QR',
                   style: const TextStyle(
                     color: _UserSubmitColors.navy,
                     fontSize: 19,
@@ -690,7 +680,7 @@ class _QrResultSubmissionPageState extends State<QrResultSubmissionPage> {
                 if (!hasFallbackInfo) ...[
                   const SizedBox(height: 6),
                   const Text(
-                    'Take or upload a kit photo, then read the QR code for kit details. QR code is required before submitting.',
+                    'Scan the kit QR code, choose Positive or Negative, then submit. Photo is optional.',
                     style: TextStyle(
                       color: _UserSubmitColors.muted,
                       height: 1.35,
@@ -714,6 +704,8 @@ class _QrResultSubmissionPageState extends State<QrResultSubmissionPage> {
           qrData.extraData['matchedKitDetails'] is Map<String, dynamic>
               ? qrData.extraData['matchedKitDetails'] as Map<String, dynamic>
               : const <String, dynamic>{};
+      final kitQrImageUrl =
+          (matchedKitDetails['qrImageUrl'] ?? '').toString().trim();
       return TweenAnimationBuilder<double>(
         tween: Tween(begin: 0, end: 1),
         duration: const Duration(milliseconds: 420),
@@ -756,14 +748,7 @@ class _QrResultSubmissionPageState extends State<QrResultSubmissionPage> {
                 ],
               ),
               const SizedBox(height: 10),
-              if (qrData.isKnownKit)
-                const Padding(
-                  padding: EdgeInsets.only(bottom: 6),
-                  child: Chip(
-                    avatar: Icon(Icons.verified_rounded, size: 18),
-                    label: Text('Admin uploaded kit matched'),
-                  ),
-                ),
+              _MatchedKitImagePreview(imageUrl: kitQrImageUrl),
               _InfoLine(label: 'Kit Name', value: kitName),
               _InfoLine(label: 'Kit ID', value: qrData.kitId),
               _InfoLine(
@@ -887,7 +872,7 @@ class _QrResultSubmissionPageState extends State<QrResultSubmissionPage> {
               ),
               SizedBox(width: 8),
               Text(
-                'Test Photo',
+                'Test Photo (Optional)',
                 style: TextStyle(
                   color: _UserSubmitColors.navy,
                   fontSize: 18,
@@ -901,7 +886,6 @@ class _QrResultSubmissionPageState extends State<QrResultSubmissionPage> {
             _SelectedTestPhotoPreview(
               image: image,
               imageBytes: imageBytes,
-              qrCropBytes: _qrCropPreviewBytes ?? _qrCandidatePreviewBytes,
               onTap:
                   () => _showSelectedPhotoPreview(
                     image: image,
@@ -923,7 +907,7 @@ class _QrResultSubmissionPageState extends State<QrResultSubmissionPage> {
                 child: Padding(
                   padding: EdgeInsets.all(12),
                   child: Text(
-                    'Take a photo with camera or select one from your device.',
+                    'Optional. Scan QR first, then submit Positive or Negative.',
                     textAlign: TextAlign.center,
                     style: TextStyle(color: _UserSubmitColors.muted),
                   ),
@@ -1031,17 +1015,61 @@ class _InfoLine extends StatelessWidget {
   }
 }
 
+class _MatchedKitImagePreview extends StatelessWidget {
+  const _MatchedKitImagePreview({required this.imageUrl});
+
+  final String imageUrl;
+
+  @override
+  Widget build(BuildContext context) {
+    if (imageUrl.isEmpty) return const SizedBox.shrink();
+
+    final dataUrlBytes = _imageBytesFromDataUrl(imageUrl);
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(8),
+        child: Container(
+          width: double.infinity,
+          constraints: const BoxConstraints(maxHeight: 190),
+          color: _UserSubmitColors.blue.withOpacity(0.05),
+          child:
+              dataUrlBytes != null
+                  ? Image.memory(
+                    dataUrlBytes,
+                    fit: BoxFit.contain,
+                    gaplessPlayback: true,
+                  )
+                  : Image.network(
+                    imageUrl,
+                    fit: BoxFit.contain,
+                    errorBuilder: (_, __, ___) => const SizedBox.shrink(),
+                  ),
+        ),
+      ),
+    );
+  }
+}
+
+Uint8List? _imageBytesFromDataUrl(String value) {
+  final commaIndex = value.indexOf(',');
+  if (!value.startsWith('data:image/') || commaIndex < 0) return null;
+  try {
+    return base64Decode(value.substring(commaIndex + 1));
+  } catch (_) {
+    return null;
+  }
+}
+
 class _SelectedTestPhotoPreview extends StatelessWidget {
   const _SelectedTestPhotoPreview({
     required this.image,
     required this.imageBytes,
-    required this.qrCropBytes,
     required this.onTap,
   });
 
   final File? image;
   final Uint8List? imageBytes;
-  final Uint8List? qrCropBytes;
   final VoidCallback onTap;
 
   @override
@@ -1057,52 +1085,15 @@ class _SelectedTestPhotoPreview extends StatelessWidget {
           border: Border.all(color: _UserSubmitColors.blue.withOpacity(0.18)),
           borderRadius: BorderRadius.circular(8),
         ),
+        clipBehavior: Clip.antiAlias,
         child: Stack(
           children: [
             Positioned.fill(
               child: Padding(
                 padding: const EdgeInsets.all(8),
-                child: LayoutBuilder(
-                  builder: (context, constraints) {
-                    final compact = constraints.maxWidth < 430;
-                    final fullPhoto = _PhotoPane(
-                      title: 'Full Photo',
-                      child: _FullPhotoImage(
-                        image: image,
-                        imageBytes: imageBytes,
-                      ),
-                    );
-                    final qrPhoto = _PhotoPane(
-                      title: 'QR Area',
-                      child:
-                          qrCropBytes == null
-                              ? const _QrPendingPreview()
-                              : Image.memory(
-                                qrCropBytes!,
-                                fit: BoxFit.contain,
-                                gaplessPlayback: true,
-                                filterQuality: FilterQuality.medium,
-                              ),
-                    );
-
-                    if (compact) {
-                      return Column(
-                        children: [
-                          Expanded(flex: 3, child: fullPhoto),
-                          const SizedBox(height: 8),
-                          Expanded(flex: 2, child: qrPhoto),
-                        ],
-                      );
-                    }
-
-                    return Row(
-                      children: [
-                        Expanded(flex: 3, child: fullPhoto),
-                        const SizedBox(width: 10),
-                        Expanded(flex: 2, child: qrPhoto),
-                      ],
-                    );
-                  },
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(8),
+                  child: _FullPhotoImage(image: image, imageBytes: imageBytes),
                 ),
               ),
             ),
@@ -1171,70 +1162,6 @@ class _FullPhotoImage extends StatelessWidget {
       child: Text(
         'No photo selected',
         style: TextStyle(color: _UserSubmitColors.muted),
-      ),
-    );
-  }
-}
-
-class _PhotoPane extends StatelessWidget {
-  const _PhotoPane({required this.title, required this.child});
-
-  final String title;
-  final Widget child;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: double.infinity,
-      height: double.infinity,
-      decoration: BoxDecoration(
-        color: Colors.white.withOpacity(0.72),
-        border: Border.all(color: _UserSubmitColors.blue.withOpacity(0.16)),
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: Stack(
-        children: [
-          Positioned.fill(
-            child: Padding(padding: const EdgeInsets.all(6), child: child),
-          ),
-          Positioned(
-            left: 8,
-            top: 8,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-              decoration: BoxDecoration(
-                color: Colors.black.withOpacity(0.5),
-                borderRadius: BorderRadius.circular(999),
-              ),
-              child: Text(
-                title,
-                style: const TextStyle(color: Colors.white, fontSize: 11),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _QrPendingPreview extends StatelessWidget {
-  const _QrPendingPreview();
-
-  @override
-  Widget build(BuildContext context) {
-    return const Center(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(Icons.qr_code_scanner_rounded, color: _UserSubmitColors.muted),
-          SizedBox(height: 6),
-          Text(
-            'QR area will show here',
-            textAlign: TextAlign.center,
-            style: TextStyle(color: _UserSubmitColors.muted, fontSize: 12),
-          ),
-        ],
       ),
     );
   }

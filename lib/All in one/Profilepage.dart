@@ -1,3 +1,6 @@
+import 'dart:convert';
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -722,21 +725,45 @@ class _SubmissionPhotoPreview extends StatelessWidget {
 
     return ClipRRect(
       borderRadius: BorderRadius.circular(8),
-      child: Image.network(
-        record.imageUrl,
+      child: _submissionImage(record.imageUrl),
+    );
+  }
+
+  Widget _submissionImage(String imageUrl) {
+    final dataUrlBytes = _imageBytesFromDataUrl(imageUrl);
+    if (dataUrlBytes != null) {
+      return Image.memory(
+        dataUrlBytes,
         width: double.infinity,
         height: 96,
         fit: BoxFit.cover,
-        errorBuilder:
-            (_, __, ___) => const Row(
-              children: [
-                Icon(Icons.broken_image_outlined, size: 18),
-                SizedBox(width: 6),
-                Text('Photo attached'),
-              ],
-            ),
-      ),
+        gaplessPlayback: true,
+      );
+    }
+    return Image.network(
+      imageUrl,
+      width: double.infinity,
+      height: 96,
+      fit: BoxFit.cover,
+      errorBuilder:
+          (_, __, ___) => const Row(
+            children: [
+              Icon(Icons.broken_image_outlined, size: 18),
+              SizedBox(width: 6),
+              Text('Photo attached'),
+            ],
+          ),
     );
+  }
+}
+
+Uint8List? _imageBytesFromDataUrl(String value) {
+  final commaIndex = value.indexOf(',');
+  if (!value.startsWith('data:image/') || commaIndex < 0) return null;
+  try {
+    return base64Decode(value.substring(commaIndex + 1));
+  } catch (_) {
+    return null;
   }
 }
 

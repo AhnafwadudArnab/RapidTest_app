@@ -12,8 +12,7 @@ class SignUpPage extends StatefulWidget {
   const SignUpPage({super.key});
 
   @override
-  // ignore: library_private_types_in_public_api
-  _SignUpState createState() => _SignUpState();
+  State<SignUpPage> createState() => _SignUpState();
 }
 
 class _SignUpState extends State<SignUpPage> {
@@ -85,8 +84,7 @@ class LoginFormWidget extends StatefulWidget {
   const LoginFormWidget({super.key});
 
   @override
-  // ignore: library_private_types_in_public_api
-  _LoginFormWidgetState createState() => _LoginFormWidgetState();
+  State<LoginFormWidget> createState() => _LoginFormWidgetState();
 }
 
 class _LoginFormWidgetState extends State<LoginFormWidget> {

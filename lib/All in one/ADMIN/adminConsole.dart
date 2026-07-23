@@ -1,4 +1,6 @@
+import 'dart:convert';
 import 'dart:math' as math;
+import 'dart:ui' as ui;
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_storage/firebase_storage.dart';
@@ -44,9 +46,8 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
 
   int _selectedPageIndex = 0;
   String _selectedRecordFilter = 'All';
-  String _selectedExportFormat = 'csv';
+  String _selectedExportFormat = 'xls';
   bool _isExporting = false;
-  // ignore: unused_field
   bool _isLoadingRecords = true;
   bool _isLoadingMoreRecords = false;
   bool _hasMoreRecords = true;
@@ -59,11 +60,11 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
   static const int _recordsPageSize = 25;
 
   static const _pages = [
-    _AdminPage('Dashboard', 'Admin', Icons.dashboard_rounded),
+    _AdminPage('Dashboard', 'Admin Dashboard', Icons.dashboard_rounded),
     _AdminPage('Kits', 'Data Entry', Icons.inventory_2_rounded),
-    _AdminPage('Scans', 'Scans', Icons.qr_code_scanner_rounded),
-    _AdminPage('Reports', 'Reports', Icons.bar_chart_rounded),
-    _AdminPage('Profile', 'Profile', Icons.person_outline_rounded),
+    _AdminPage('Records', 'Scanned Reports', Icons.fact_check_outlined),
+    _AdminPage('Export', 'Dataset Export', Icons.file_download_outlined),
+    _AdminPage('Profile', 'Profile', Icons.settings_rounded),
   ];
 
   @override
@@ -81,10 +82,6 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
   }
 
   Future<void> _loadInitialRecords() async {
-    final selectedResult =
-        _selectedRecordFilter == 'All' ? null : _selectedRecordFilter;
-    final startDate = _selectedDateRange?.start;
-    final endDate = _dateRangeEndOfDay(_selectedDateRange?.end);
     setState(() {
       _isLoadingRecords = true;
       _recordsError = null;
@@ -94,16 +91,9 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
     });
 
     try {
-      final countFuture = _databaseService.countRecords(
-        selectedResult: selectedResult,
-        startDate: startDate,
-        endDate: endDate,
-      );
+      final countFuture = _databaseService.countRecords();
       final pageFuture = _databaseService.fetchRecordsPage(
         limit: _recordsPageSize,
-        selectedResult: selectedResult,
-        startDate: startDate,
-        endDate: endDate,
       );
       final results = await Future.wait<Object>([countFuture, pageFuture]);
       final totalCount = results[0] as int;
@@ -129,10 +119,6 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
 
   Future<void> _loadMoreRecords() async {
     if (_isLoadingMoreRecords || !_hasMoreRecords) return;
-    final selectedResult =
-        _selectedRecordFilter == 'All' ? null : _selectedRecordFilter;
-    final startDate = _selectedDateRange?.start;
-    final endDate = _dateRangeEndOfDay(_selectedDateRange?.end);
 
     setState(() {
       _isLoadingMoreRecords = true;
@@ -143,9 +129,6 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
       final snapshot = await _databaseService.fetchRecordsPage(
         limit: _recordsPageSize,
         startAfter: _lastRecordDocument,
-        selectedResult: selectedResult,
-        startDate: startDate,
-        endDate: endDate,
       );
 
       if (!mounted) return;
@@ -179,24 +162,26 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
     if (picked == null || !mounted) return;
 
     setState(() => _selectedDateRange = picked);
-    _loadInitialRecords();
   }
 
   void _clearDateRange() {
     if (_selectedDateRange == null) return;
     setState(() => _selectedDateRange = null);
-    _loadInitialRecords();
   }
 
   Future<void> _export() async {
     setState(() => _isExporting = true);
     try {
-      final path = await _exportService.exportRecords(_selectedExportFormat);
+      final exportRecords = _lastLoadedRecords;
+      final path = await _exportService.exportRecords(
+        _selectedExportFormat,
+        records: exportRecords,
+      );
       if (!mounted) return;
       final item = _ExportHistoryItem(
         path: path,
         format: _selectedExportFormat,
-        recordCount: _lastLoadedRecords.length,
+        recordCount: exportRecords.length,
         exportedAt: DateTime.now(),
       );
       setState(() {
@@ -233,6 +218,14 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
     if (shouldReloadRecords) {
       _loadInitialRecords();
     }
+  }
+
+  Future<void> _searchRecords(String value) async {
+    setState(() {});
+    if (value.trim().isEmpty || !_hasMoreRecords || _isLoadingMoreRecords) {
+      return;
+    }
+    await _loadMoreRecords();
   }
 
   List<DatasetRecordModel> _lastLoadedRecords = [];
@@ -311,14 +304,15 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
                 builder: (context, constraints) {
                   final records = List<DatasetRecordModel>.of(_loadedRecords)
                     ..sort(_newestFirst);
-                  _lastLoadedRecords = records;
+                  final filteredRecords = _filterRecords(records);
+                  _lastLoadedRecords = filteredRecords;
 
                   return SafeArea(
                     child: _AdminSurface(
                       page: _pages[_selectedPageIndex],
                       pageIndex: _selectedPageIndex,
                       scrollController: _adminScrollController,
-                      records: _filterRecords(records),
+                      records: filteredRecords,
                       allRecords: records,
                       totalRecordCount: _totalRecordCount ?? records.length,
                       selectedDateRange: _selectedDateRange,
@@ -331,11 +325,10 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
                       selectedExportFormat: _selectedExportFormat,
                       isExporting: _isExporting,
                       searchController: _searchController,
-                      onSearchChanged: (_) => setState(() {}),
-                      onFilterChanged: (filter) {
-                        setState(() => _selectedRecordFilter = filter);
-                        _loadInitialRecords();
-                      },
+                      onSearchChanged: _searchRecords,
+                      onFilterChanged:
+                          (filter) =>
+                              setState(() => _selectedRecordFilter = filter),
                       onFormatChanged:
                           (format) =>
                               setState(() => _selectedExportFormat = format),
@@ -343,6 +336,10 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
                       recentExports: _recentExports,
                       onDeleteRecentExport: _deleteRecentExport,
                       onPageSelected: _selectPage,
+                      onBack: () {
+                        if (_selectedPageIndex == 0) return;
+                        _selectPage(0);
+                      },
                       onLogout: _logout,
                     ),
                   );
@@ -351,7 +348,31 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
     );
   }
 
-  void _logout() {
+  Future<void> _logout() async {
+    final shouldLogout = await showDialog<bool>(
+      context: context,
+      builder:
+          (context) => AlertDialog(
+            title: const Text('Logout?'),
+            content: const Text('Are you sure you want to logout from admin?'),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: const Text('Cancel'),
+              ),
+              FilledButton.icon(
+                onPressed: () => Navigator.pop(context, true),
+                icon: const Icon(Icons.logout_rounded),
+                label: const Text('Logout'),
+                style: FilledButton.styleFrom(
+                  backgroundColor: _AdminColors.red,
+                  foregroundColor: Colors.white,
+                ),
+              ),
+            ],
+          ),
+    );
+    if (shouldLogout != true || !mounted) return;
     Get.offAll(() => const Login(), transition: Transition.rightToLeft);
   }
 
@@ -368,18 +389,34 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
         'Negative' => record.selectedResult == 'Negative',
         _ => true,
       };
+      final recordDate = record.submittedAt ?? record.createdAt;
+      final rangeMatches =
+          _selectedDateRange == null ||
+          (recordDate != null &&
+              !recordDate.isBefore(_selectedDateRange!.start) &&
+              !recordDate.isAfter(
+                _dateRangeEndOfDay(_selectedDateRange!.end)!,
+              ));
       final searchable =
           [
             record.recordId,
             record.userName,
             record.userEmail,
             record.testType,
+            record.kitDisplayName,
             record.kitId,
             record.qrCodeValue,
+            record.matchedQrCode,
+            record.matchedKitName,
+            record.kitCategory,
+            record.kitSampleType,
+            record.kitManufacturer,
+            record.imageName,
             record.selectedResult,
           ].join(' ').toLowerCase();
       return pageMatches &&
           filterMatches &&
+          rangeMatches &&
           (query.isEmpty || searchable.contains(query));
     }).toList();
   }
@@ -410,6 +447,7 @@ class _AdminSurface extends StatelessWidget {
     required this.recentExports,
     required this.onDeleteRecentExport,
     required this.onPageSelected,
+    required this.onBack,
     required this.onLogout,
   });
 
@@ -436,13 +474,14 @@ class _AdminSurface extends StatelessWidget {
   final List<_ExportHistoryItem> recentExports;
   final ValueChanged<_ExportHistoryItem> onDeleteRecentExport;
   final ValueChanged<int> onPageSelected;
+  final VoidCallback onBack;
   final VoidCallback onLogout;
 
   @override
   Widget build(BuildContext context) {
     return Column(
       children: [
-        _TopBar(page: page),
+        _TopBar(page: page, pageIndex: pageIndex, onBack: onBack),
         Expanded(
           child: _AnimatedAdminBackground(
             child: LayoutBuilder(
@@ -465,11 +504,8 @@ class _AdminSurface extends StatelessWidget {
                   children: [
                     switch (pageIndex) {
                       0 => _DashboardHome(
-                        records: allRecords,
+                        records: records,
                         onPageTap: onPageSelected,
-                        selectedDateRange: selectedDateRange,
-                        onDateRangePressed: onDateRangePressed,
-                        onClearDateRange: onClearDateRange,
                       ),
                       1 => const _QrKitsPage(),
                       2 => _AllRecordsPage(
@@ -560,19 +596,10 @@ class _AnimatedAdminBackgroundState extends State<_AnimatedAdminBackground>
 }
 
 class _DashboardHome extends StatelessWidget {
-  const _DashboardHome({
-    required this.records,
-    required this.onPageTap,
-    required this.selectedDateRange,
-    required this.onDateRangePressed,
-    required this.onClearDateRange,
-  });
+  const _DashboardHome({required this.records, required this.onPageTap});
 
   final List<DatasetRecordModel> records;
   final ValueChanged<int>? onPageTap;
-  final DateTimeRange? selectedDateRange;
-  final VoidCallback onDateRangePressed;
-  final VoidCallback onClearDateRange;
 
   @override
   Widget build(BuildContext context) {
@@ -580,23 +607,6 @@ class _DashboardHome extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Wrap(
-          alignment: WrapAlignment.spaceBetween,
-          runSpacing: 14,
-          children: [
-            const _SectionTitle(
-              title: 'Admin',
-              subtitle:
-                  'Here is what is happening with your rapid test records.',
-            ),
-            _DateRangeButton(
-              range: selectedDateRange,
-              onPressed: onDateRangePressed,
-              onClear: onClearDateRange,
-            ),
-          ],
-        ),
-        const SizedBox(height: 20),
         _MetricGrid(
           metrics: [
             _MetricData(
@@ -684,16 +694,12 @@ class _AllRecordsPage extends StatelessWidget {
           onChanged: onSearchChanged,
         ),
         const SizedBox(height: 14),
-        _FilterRow(
-          filters: const ['All', 'Positive', 'Negative'],
+        _RecordFilterControls(
           selectedFilter: selectedFilter,
           onFilterChanged: onFilterChanged,
-        ),
-        const SizedBox(height: 12),
-        _DateRangeButton(
-          range: selectedDateRange,
-          onPressed: onDateRangePressed,
-          onClear: onClearDateRange,
+          selectedDateRange: selectedDateRange,
+          onDateRangePressed: onDateRangePressed,
+          onClearDateRange: onClearDateRange,
         ),
         const SizedBox(height: 20),
         if (records.isEmpty)
@@ -867,7 +873,7 @@ class _DatasetExportPage extends StatelessWidget {
         ),
         const SizedBox(height: 22),
         _ExportPreview(
-          records: records.take(5).toList(),
+          records: records.take(10).toList(),
           total: records.length,
         ),
         const SizedBox(height: 18),
@@ -1071,8 +1077,8 @@ class _QrKitsPageState extends State<_QrKitsPage> {
     try {
       final pickedFile = await _imagePicker.pickImage(
         source: source,
-        imageQuality: 85,
-        maxWidth: 1600,
+        imageQuality: 60,
+        maxWidth: 900,
         preferredCameraDevice: CameraDevice.rear,
       );
       if (pickedFile == null) return;
@@ -1378,6 +1384,7 @@ class _QrKitRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final compact = MediaQuery.sizeOf(context).width <= 520;
+    final preview = _QrKitPreview(kit: kit, size: compact ? 52 : 58);
     final details = Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -1393,23 +1400,6 @@ class _QrKitRow extends StatelessWidget {
           kit.qrCode,
           style: const TextStyle(color: _AdminColors.muted),
         ),
-        if (kit.category.isNotEmpty ||
-            kit.sampleType.isNotEmpty ||
-            kit.manufacturer.isNotEmpty) ...[
-          const SizedBox(height: 6),
-          Wrap(
-            spacing: 6,
-            runSpacing: 6,
-            children: [
-              if (kit.category.isNotEmpty)
-                _MiniInfoChip(label: kit.category, icon: Icons.category),
-              if (kit.sampleType.isNotEmpty)
-                _MiniInfoChip(label: kit.sampleType, icon: Icons.science),
-              if (kit.manufacturer.isNotEmpty)
-                _MiniInfoChip(label: kit.manufacturer, icon: Icons.business),
-            ],
-          ),
-        ],
         if (kit.qrImageName.isNotEmpty || kit.qrImageUrl.isNotEmpty) ...[
           const SizedBox(height: 4),
           Text(
@@ -1450,11 +1440,7 @@ class _QrKitRow extends StatelessWidget {
                 children: [
                   Row(
                     children: [
-                      const _SoftIcon(
-                        icon: Icons.qr_code_2_rounded,
-                        color: _AdminColors.purple,
-                        size: 42,
-                      ),
+                      preview,
                       const SizedBox(width: 12),
                       Expanded(child: details),
                     ],
@@ -1465,17 +1451,127 @@ class _QrKitRow extends StatelessWidget {
               )
               : Row(
                 children: [
-                  const _SoftIcon(
-                    icon: Icons.qr_code_2_rounded,
-                    color: _AdminColors.purple,
-                    size: 48,
-                  ),
+                  preview,
                   const SizedBox(width: 14),
                   Expanded(child: details),
                   actions,
                 ],
               ),
     );
+  }
+}
+
+class _QrKitPreview extends StatefulWidget {
+  const _QrKitPreview({required this.kit, required this.size});
+
+  final QrKitRecord kit;
+  final double size;
+
+  @override
+  State<_QrKitPreview> createState() => _QrKitPreviewState();
+}
+
+class _QrKitPreviewState extends State<_QrKitPreview> {
+  Future<String?>? _storageUrlFuture;
+  bool _directUrlFailed = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _prepareStorageUrl();
+  }
+
+  @override
+  void didUpdateWidget(_QrKitPreview oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.kit.qrCode != widget.kit.qrCode ||
+        oldWidget.kit.qrImageUrl != widget.kit.qrImageUrl ||
+        oldWidget.kit.qrImageStoragePath != widget.kit.qrImageStoragePath) {
+      _directUrlFailed = false;
+      _prepareStorageUrl();
+    }
+  }
+
+  void _prepareStorageUrl() {
+    final storagePath = widget.kit.qrImageStoragePath.trim();
+    _storageUrlFuture =
+        storagePath.isEmpty
+            ? null
+            : FirebaseStorage.instance.ref(storagePath).getDownloadURL();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(8),
+      child: Container(
+        width: widget.size,
+        height: widget.size,
+        color: Colors.white,
+        child: _buildImage(),
+      ),
+    );
+  }
+
+  Widget _buildImage() {
+    final imageUrl = widget.kit.qrImageUrl.trim();
+    if (imageUrl.isEmpty || _directUrlFailed) {
+      return _buildStorageImage();
+    }
+
+    final dataUrlBytes = _imageBytesFromDataUrl(imageUrl);
+    if (dataUrlBytes != null) {
+      return Image.memory(
+        dataUrlBytes,
+        width: widget.size,
+        height: widget.size,
+        fit: BoxFit.cover,
+        gaplessPlayback: true,
+      );
+    }
+
+    return Image.network(
+      imageUrl,
+      width: widget.size,
+      height: widget.size,
+      fit: BoxFit.cover,
+      errorBuilder: (_, __, ___) {
+        if (_storageUrlFuture != null) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted) setState(() => _directUrlFailed = true);
+          });
+        }
+        return _buildStorageImage();
+      },
+    );
+  }
+
+  Widget _buildStorageImage() {
+    final storageUrlFuture = _storageUrlFuture;
+    if (storageUrlFuture == null) return _fallbackIcon(Icons.qr_code_2_rounded);
+
+    return FutureBuilder<String?>(
+      future: storageUrlFuture,
+      builder: (context, snapshot) {
+        final storageUrl = snapshot.data;
+        if (storageUrl == null || storageUrl.isEmpty) {
+          return _fallbackIcon(Icons.qr_code_2_rounded);
+        }
+
+        return Image.network(
+          storageUrl,
+          width: widget.size,
+          height: widget.size,
+          fit: BoxFit.cover,
+          errorBuilder:
+              (_, __, ___) => _fallbackIcon(Icons.broken_image_outlined),
+        );
+      },
+    );
+  }
+
+  Widget _fallbackIcon(IconData icon) {
+    return _SoftIcon(icon: icon, color: _AdminColors.purple, size: widget.size);
   }
 }
 
@@ -1516,21 +1612,21 @@ class _QrUploadInfo extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.all(18),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       decoration: BoxDecoration(
-        color: Colors.white.withOpacity(0.72),
-        border: Border.all(color: _AdminColors.blue.withOpacity(0.24)),
+        color: _AdminColors.red.withOpacity(0.055),
+        border: Border.all(color: _AdminColors.red.withOpacity(0.28)),
         borderRadius: BorderRadius.circular(8),
       ),
       child: const Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           CircleAvatar(
-            radius: 18,
-            backgroundColor: _AdminColors.blue,
-            child: Icon(Icons.info_rounded, color: Colors.white, size: 22),
+            radius: 14,
+            backgroundColor: _AdminColors.red,
+            child: Icon(Icons.info_rounded, color: Colors.white, size: 17),
           ),
-          SizedBox(width: 16),
+          SizedBox(width: 10),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -1540,16 +1636,26 @@ class _QrUploadInfo extends StatelessWidget {
                   style: TextStyle(
                     color: _AdminColors.navy,
                     fontWeight: FontWeight.w900,
-                    fontSize: 18,
+                    fontSize: 15,
                   ),
                 ),
-                SizedBox(height: 8),
+                SizedBox(height: 4),
                 Text(
                   'Insert or update test-kit details from the admin panel. The saved QR code and kit information are used when users scan and submit results.',
                   style: TextStyle(
                     color: _AdminColors.muted,
-                    fontSize: 16,
-                    height: 1.35,
+                    fontSize: 13,
+                    height: 1.25,
+                  ),
+                ),
+                SizedBox(height: 4),
+                Text(
+                  'QR/kit images are saved in Firebase Storage.',
+                  style: TextStyle(
+                    color: _AdminColors.red,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w900,
+                    height: 1.2,
                   ),
                 ),
               ],
@@ -1618,7 +1724,9 @@ class _QrUploadDropZone extends StatelessWidget {
             ),
             const SizedBox(height: 8),
             Text(
-              hasImage ? (imageName ?? 'Saved QR image') : 'JPG, PNG (Max 5MB)',
+              hasImage
+                  ? (imageName ?? 'Saved QR image')
+                  : 'JPG, PNG, WEBP, or GIF image.',
               textAlign: TextAlign.center,
               style: const TextStyle(color: _AdminColors.muted, fontSize: 16),
             ),
@@ -1833,9 +1941,15 @@ class _QrKitsError extends StatelessWidget {
 }
 
 class _TopBar extends StatelessWidget {
-  const _TopBar({required this.page});
+  const _TopBar({
+    required this.page,
+    required this.pageIndex,
+    required this.onBack,
+  });
 
   final _AdminPage page;
+  final int pageIndex;
+  final VoidCallback onBack;
 
   @override
   Widget build(BuildContext context) {
@@ -1854,9 +1968,10 @@ class _TopBar extends StatelessWidget {
         children: [
           IconButton(
             tooltip: 'Back',
-            onPressed: () => Navigator.maybePop(context),
+            onPressed: pageIndex == 0 ? null : onBack,
             icon: const Icon(Icons.arrow_back_rounded, size: 28),
-            color: Colors.white,
+            color:
+                pageIndex == 0 ? Colors.white.withOpacity(0.45) : Colors.white,
           ),
           const SizedBox(width: 8),
           Expanded(
@@ -1894,33 +2009,41 @@ class _AdminBottomNav extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        color: Colors.white,
-        border: const Border(top: BorderSide(color: _AdminColors.border)),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.06),
-            blurRadius: 18,
-            offset: const Offset(0, -6),
-          ),
-        ],
-      ),
-      child: SafeArea(
-        top: false,
-        child: SizedBox(
-          height: 72,
-          child: Row(
-            children: [
-              for (final entry in pages.indexed)
-                Expanded(
-                  child: _AdminBottomNavItem(
-                    page: entry.$2,
-                    selected: entry.$1 == selectedIndex,
-                    onTap: () => onSelected(entry.$1),
-                  ),
+    return SafeArea(
+      top: false,
+      minimum: const EdgeInsets.fromLTRB(14, 0, 14, 10),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(24),
+        child: BackdropFilter(
+          filter: ui.ImageFilter.blur(sigmaX: 18, sigmaY: 18),
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(0.72),
+              borderRadius: BorderRadius.circular(24),
+              border: Border.all(color: Colors.white.withOpacity(0.58)),
+              boxShadow: [
+                BoxShadow(
+                  color: _AdminColors.navy.withOpacity(0.14),
+                  blurRadius: 28,
+                  offset: const Offset(0, 12),
                 ),
-            ],
+              ],
+            ),
+            child: SizedBox(
+              height: 72,
+              child: Row(
+                children: [
+                  for (final entry in pages.indexed)
+                    Expanded(
+                      child: _AdminBottomNavItem(
+                        page: entry.$2,
+                        selected: entry.$1 == selectedIndex,
+                        onTap: () => onSelected(entry.$1),
+                      ),
+                    ),
+                ],
+              ),
+            ),
           ),
         ),
       ),
@@ -1942,25 +2065,70 @@ class _AdminBottomNavItem extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final color = selected ? _AdminColors.blue : const Color(0xFF606A80);
-    return InkWell(
-      onTap: onTap,
-      child: SizedBox.expand(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(page.icon, color: color, size: 25),
-            const SizedBox(height: 4),
-            Text(
-              page.name,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                color: color,
-                fontSize: 12,
-                fontWeight: selected ? FontWeight.w800 : FontWeight.w600,
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        child: SizedBox.expand(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              AnimatedContainer(
+                duration: const Duration(milliseconds: 240),
+                curve: Curves.easeOutCubic,
+                width: 34,
+                height: 30,
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  gradient:
+                      selected
+                          ? const LinearGradient(
+                            begin: Alignment.topLeft,
+                            end: Alignment.bottomRight,
+                            colors: [Color(0xFF1E90FF), Color(0xFF8D5CF6)],
+                          )
+                          : null,
+                  color: selected ? null : Colors.transparent,
+                  borderRadius: BorderRadius.circular(11),
+                  boxShadow:
+                      selected
+                          ? [
+                            BoxShadow(
+                              color: _AdminColors.blue.withOpacity(0.22),
+                              blurRadius: 10,
+                              offset: const Offset(0, 4),
+                            ),
+                          ]
+                          : null,
+                ),
+                child: AnimatedScale(
+                  scale: selected ? 1.0 : 0.92,
+                  duration: const Duration(milliseconds: 220),
+                  curve: Curves.easeOutCubic,
+                  child: Icon(
+                    page.icon,
+                    color: selected ? Colors.white : color,
+                    size: 23,
+                  ),
+                ),
               ),
-            ),
-          ],
+              const SizedBox(height: 3),
+              AnimatedDefaultTextStyle(
+                duration: const Duration(milliseconds: 220),
+                curve: Curves.easeOutCubic,
+                style: TextStyle(
+                  color: color,
+                  fontSize: 12,
+                  fontWeight: selected ? FontWeight.w800 : FontWeight.w600,
+                ),
+                child: Text(
+                  page.name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -2431,16 +2599,16 @@ class _QuickActions extends StatelessWidget {
         onTap: () => onTap?.call(1),
       ),
       _ActionTile(
-        title: 'Scans',
+        title: 'Records',
         subtitle: 'View all test records',
-        icon: Icons.qr_code_scanner_rounded,
+        icon: Icons.fact_check_outlined,
         color: _AdminColors.green,
         onTap: () => onTap?.call(2),
       ),
       _ActionTile(
-        title: 'Reports',
+        title: 'Export',
         subtitle: 'Download data',
-        icon: Icons.bar_chart_rounded,
+        icon: Icons.file_download_outlined,
         color: _AdminColors.purple,
         onTap: () => onTap?.call(3),
       ),
@@ -2737,6 +2905,16 @@ class _RecordThumbnailState extends State<_RecordThumbnail> {
 
   Widget _buildImage(String imageUrl, String name, Color color) {
     if (imageUrl.isNotEmpty && !_directUrlFailed) {
+      final dataUrlBytes = _imageBytesFromDataUrl(imageUrl);
+      if (dataUrlBytes != null) {
+        return Image.memory(
+          dataUrlBytes,
+          width: widget.size,
+          height: widget.size,
+          fit: BoxFit.cover,
+          gaplessPlayback: true,
+        );
+      }
       return Image.network(
         imageUrl,
         width: widget.size,
@@ -2783,6 +2961,16 @@ class _RecordThumbnailState extends State<_RecordThumbnail> {
   }
 }
 
+Uint8List? _imageBytesFromDataUrl(String value) {
+  final commaIndex = value.indexOf(',');
+  if (!value.startsWith('data:image/') || commaIndex < 0) return null;
+  try {
+    return base64Decode(value.substring(commaIndex + 1));
+  } catch (_) {
+    return null;
+  }
+}
+
 class _ThumbnailInitial extends StatelessWidget {
   const _ThumbnailInitial({required this.name, required this.color});
 
@@ -2808,10 +2996,11 @@ class _ExportPreview extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final compact = MediaQuery.sizeOf(context).width <= 520;
+    final shownCount = records.length;
     return _Panel(
-      title: 'Preview (first 10 records)',
+      title: 'Preview (first $shownCount results)',
       trailing: Text(
-        '$total records match your filters',
+        '$total results matched with your filter',
         style: const TextStyle(color: _AdminColors.blue),
       ),
       child:
@@ -3103,41 +3292,6 @@ class _SearchAndFilterBar extends StatelessWidget {
           ],
         );
       },
-    );
-  }
-}
-
-class _FilterRow extends StatelessWidget {
-  const _FilterRow({
-    required this.filters,
-    required this.selectedFilter,
-    required this.onFilterChanged,
-  });
-
-  final List<String> filters;
-  final String selectedFilter;
-  final ValueChanged<String> onFilterChanged;
-
-  @override
-  Widget build(BuildContext context) {
-    final compact = MediaQuery.sizeOf(context).width <= 520;
-    return SizedBox(
-      height: compact ? 46 : 50,
-      child: ListView.separated(
-        scrollDirection: Axis.horizontal,
-        itemCount: filters.length,
-        separatorBuilder: (_, __) => SizedBox(width: compact ? 8 : 12),
-        itemBuilder: (context, index) {
-          final filter = filters[index];
-          return _FilterChipButton(
-            label: filter,
-            selected: selectedFilter == filter,
-            color: _filterColor(filter),
-            onTap: () => onFilterChanged(filter),
-            compact: compact,
-          );
-        },
-      ),
     );
   }
 }
@@ -3471,23 +3625,74 @@ class _FormatButton extends StatelessWidget {
   }
 }
 
+class _RecordFilterControls extends StatelessWidget {
+  const _RecordFilterControls({
+    required this.selectedFilter,
+    required this.onFilterChanged,
+    required this.selectedDateRange,
+    required this.onDateRangePressed,
+    required this.onClearDateRange,
+  });
+
+  final String selectedFilter;
+  final ValueChanged<String> onFilterChanged;
+  final DateTimeRange? selectedDateRange;
+  final VoidCallback onDateRangePressed;
+  final VoidCallback onClearDateRange;
+
+  @override
+  Widget build(BuildContext context) {
+    final compact = MediaQuery.sizeOf(context).width <= 520;
+    final filters = const ['All', 'Positive', 'Negative'];
+    return SizedBox(
+      height: compact ? 50 : 54,
+      child: Row(
+        children: [
+          Expanded(
+            child: ListView.separated(
+              scrollDirection: Axis.horizontal,
+              itemCount: filters.length,
+              separatorBuilder: (_, __) => SizedBox(width: compact ? 8 : 12),
+              itemBuilder: (context, index) {
+                final filter = filters[index];
+                return _FilterChipButton(
+                  label: filter,
+                  selected: selectedFilter == filter,
+                  color: _filterColor(filter),
+                  onTap: () => onFilterChanged(filter),
+                );
+              },
+            ),
+          ),
+          SizedBox(width: compact ? 8 : 12),
+          _DateRangeButton(
+            range: selectedDateRange,
+            onPressed: onDateRangePressed,
+            onClear: onClearDateRange,
+            compactWidth: true,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _FilterChipButton extends StatelessWidget {
   const _FilterChipButton({
     required this.label,
     required this.selected,
     required this.color,
     required this.onTap,
-    this.compact = false,
   });
 
   final String label;
   final bool selected;
   final Color color;
   final VoidCallback onTap;
-  final bool compact;
 
   @override
   Widget build(BuildContext context) {
+    final compact = MediaQuery.sizeOf(context).width <= 520;
     return InkWell(
       onTap: onTap,
       borderRadius: BorderRadius.circular(8),
@@ -3496,7 +3701,7 @@ class _FilterChipButton extends StatelessWidget {
         curve: Curves.easeOutCubic,
         height: compact ? 46 : 50,
         alignment: Alignment.center,
-        padding: EdgeInsets.symmetric(horizontal: compact ? 16 : 22),
+        padding: EdgeInsets.symmetric(horizontal: compact ? 12 : 22),
         decoration: BoxDecoration(
           color: selected ? color.withOpacity(0.1) : Colors.white,
           border: Border.all(color: selected ? color : color.withOpacity(0.25)),
@@ -3620,11 +3825,13 @@ class _DateRangeButton extends StatelessWidget {
     required this.range,
     required this.onPressed,
     required this.onClear,
+    this.compactWidth = false,
   });
 
   final DateTimeRange? range;
   final VoidCallback onPressed;
   final VoidCallback onClear;
+  final bool compactWidth;
 
   @override
   Widget build(BuildContext context) {
@@ -3632,7 +3839,11 @@ class _DateRangeButton extends StatelessWidget {
       builder: (context, constraints) {
         final compact = MediaQuery.sizeOf(context).width <= 520;
         final hasRange = range != null;
-        final width = math.min(compact ? 250.0 : 292.0, constraints.maxWidth);
+        final targetWidth =
+            compactWidth
+                ? (compact ? 104.0 : 132.0)
+                : (compact ? 250.0 : 292.0);
+        final width = math.min(targetWidth, constraints.maxWidth);
         return SizedBox(
           width: width,
           child: Row(
@@ -3653,9 +3864,14 @@ class _DateRangeButton extends StatelessWidget {
                   style: OutlinedButton.styleFrom(
                     foregroundColor: _AdminColors.navy,
                     backgroundColor: Colors.white,
-                    minimumSize: Size.fromHeight(compact ? 50 : 54),
+                    minimumSize: Size.fromHeight(
+                      compactWidth ? (compact ? 46 : 50) : (compact ? 50 : 54),
+                    ),
                     padding: EdgeInsets.symmetric(
-                      horizontal: compact ? 12 : 16,
+                      horizontal:
+                          compactWidth
+                              ? (compact ? 8 : 10)
+                              : (compact ? 12 : 16),
                     ),
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(8),
@@ -3667,7 +3883,8 @@ class _DateRangeButton extends StatelessWidget {
                 const SizedBox(width: 8),
                 SizedBox(
                   width: compact ? 44 : 48,
-                  height: compact ? 50 : 54,
+                  height:
+                      compactWidth ? (compact ? 46 : 50) : (compact ? 50 : 54),
                   child: OutlinedButton(
                     onPressed: onClear,
                     style: OutlinedButton.styleFrom(
@@ -3834,14 +4051,21 @@ class _LineChartPainter extends CustomPainter {
     }
 
     final textPainter = TextPainter(textDirection: TextDirection.ltr);
-    const labels = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-    for (var i = 0; i < labels.length; i++) {
+    final labelIndexes =
+        values.length <= 7
+            ? List<int>.generate(values.length, (index) => index)
+            : <int>[0, values.length ~/ 2, values.length - 1];
+    for (final index in labelIndexes) {
+      final label =
+          values.length <= 7
+              ? const ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'][index]
+              : 'Day ${index + 1}';
       textPainter.text = TextSpan(
-        text: labels[i],
+        text: label,
         style: const TextStyle(color: _AdminColors.muted, fontSize: 11),
       );
       textPainter.layout();
-      final x = size.width * i / math.max(labels.length - 1, 1);
+      final x = size.width * index / math.max(values.length - 1, 1);
       textPainter.paint(
         canvas,
         Offset(x - textPainter.width / 2, size.height - 16),
@@ -3933,18 +4157,18 @@ class _AdminColors {
 }
 
 List<int> _weeklyCounts(List<DatasetRecordModel> records, int days) {
-  final counts = List<int>.filled(7, 0);
-  final start = DateTime.now().subtract(Duration(days: days - 1));
+  final safeDays = days.clamp(7, 30);
+  final counts = List<int>.filled(safeDays, 0);
+  final now = DateTime.now();
+  final today = DateTime(now.year, now.month, now.day);
+  final start = today.subtract(Duration(days: safeDays - 1));
   for (final record in records) {
     final date = record.submittedAt ?? record.createdAt;
     if (date == null) continue;
-    if (date.isBefore(DateTime(start.year, start.month, start.day))) {
-      continue;
-    }
-    counts[date.weekday - 1] += 1;
-  }
-  if (counts.every((value) => value == 0)) {
-    return const [70, 105, 140, 215, 155, 118, 82];
+    final day = DateTime(date.year, date.month, date.day);
+    final index = day.difference(start).inDays;
+    if (index < 0 || index >= safeDays) continue;
+    counts[index] += 1;
   }
   return counts;
 }

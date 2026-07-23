@@ -1,3 +1,6 @@
+import 'dart:convert';
+import 'dart:typed_data';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 
@@ -107,12 +110,7 @@ class _RecordCard extends StatelessWidget {
               const SizedBox(height: 8),
               ClipRRect(
                 borderRadius: BorderRadius.circular(8),
-                child: Image.network(
-                  record.imageUrl,
-                  height: 150,
-                  width: double.infinity,
-                  fit: BoxFit.cover,
-                ),
+                child: _recordImage(record.imageUrl),
               ),
             ],
             const SizedBox(height: 4),
@@ -129,5 +127,33 @@ class _RecordCard extends StatelessWidget {
         ),
       ),
     );
+  }
+
+  Widget _recordImage(String imageUrl) {
+    final dataUrlBytes = _imageBytesFromDataUrl(imageUrl);
+    if (dataUrlBytes != null) {
+      return Image.memory(
+        dataUrlBytes,
+        height: 150,
+        width: double.infinity,
+        fit: BoxFit.cover,
+      );
+    }
+    return Image.network(
+      imageUrl,
+      height: 150,
+      width: double.infinity,
+      fit: BoxFit.cover,
+    );
+  }
+}
+
+Uint8List? _imageBytesFromDataUrl(String value) {
+  final commaIndex = value.indexOf(',');
+  if (!value.startsWith('data:image/') || commaIndex < 0) return null;
+  try {
+    return base64Decode(value.substring(commaIndex + 1));
+  } catch (_) {
+    return null;
   }
 }

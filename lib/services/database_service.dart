@@ -1,25 +1,27 @@
+import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:firebase_storage/firebase_storage.dart';
 
 import '../models/dataset_record_model.dart';
+import 'cloudinary_service.dart';
 import 'qr_parser_service.dart';
 
 class DatabaseService {
   DatabaseService({
     FirebaseFirestore? firestore,
     FirebaseAuth? auth,
-    FirebaseStorage? storage,
+    CloudinaryService? cloudinaryService,
   }) : _firestore = firestore ?? FirebaseFirestore.instance,
        _auth = auth ?? FirebaseAuth.instance,
-       _storage = storage ?? FirebaseStorage.instance;
+       _cloudinaryService = cloudinaryService ?? const CloudinaryService();
 
   final FirebaseFirestore _firestore;
   final FirebaseAuth _auth;
-  final FirebaseStorage _storage;
+  final CloudinaryService _cloudinaryService;
+  static const int _maxEmbeddedReportImageBytes = 500 * 1024;
 
   CollectionReference<Map<String, dynamic>> get _records =>
       _firestore.collection('dataset_records');
@@ -81,23 +83,11 @@ class DatabaseService {
 
     if (imageFile != null || imageBytes != null) {
       final safeImageName = _safeImageName(imageName, doc.id);
-      imageStoragePath =
-          'rapid_test_reports/${user.uid}/${doc.id}_${DateTime.now().millisecondsSinceEpoch}_$safeImageName';
       try {
-        final ref = _storage.ref(imageStoragePath);
-        final metadata = SettableMetadata(
-          contentType: _contentTypeFor(safeImageName),
-        );
-        final uploadTask =
-            imageBytes != null
-                ? await ref.putData(imageBytes, metadata)
-                : await ref.putFile(imageFile!, metadata);
-        imageUrl = await uploadTask.ref.getDownloadURL();
-      } on FirebaseException catch (e) {
-        imageUploadError =
-            e.code == 'permission-denied'
-                ? 'Kit photo upload permission denied.'
-                : 'Kit photo upload failed: ${e.message ?? e.code}';
+        final bytes = imageBytes ?? await imageFile!.readAsBytes();
+        imageUrl = _embeddedReportImageDataUrl(bytes, safeImageName);
+      } on StateError catch (e) {
+        imageUploadError = e.message;
         imageStoragePath = '';
         imageUrl = '';
       }
@@ -106,30 +96,30 @@ class DatabaseService {
     await doc.set({
       'recordId': doc.id,
       'userId': user.uid,
-      'userName': userProfile['name'] ?? user.displayName ?? '',
-      'userEmail': user.email ?? userProfile['email'] ?? '',
-      'qrCodeValue': resolvedTestType,
-      'kitId': qrData?.kitId ?? '',
-      'testType': resolvedTestType,
+      'userName': _cleanString(userProfile['name'] ?? user.displayName, 120),
+      'userEmail': _cleanString(user.email ?? userProfile['email'], 180),
+      'qrCodeValue': _cleanString(resolvedTestType, 2000),
+      'kitId': _cleanString(qrData?.kitId, 160),
+      'testType': _cleanString(resolvedTestType, 160),
       'isKnownQrKit': qrData?.isKnownKit == true,
-      'matchedQrKitId': qrExtraData['matchedQrKitId'] ?? '',
-      'matchedQrCode': qrExtraData['matchedQrCode'] ?? '',
-      'matchedKitName': qrExtraData['matchedKitName'] ?? '',
-      'kitCategory': matchedKitDetails['category'] ?? '',
-      'kitSampleType': matchedKitDetails['sampleType'] ?? '',
-      'kitManufacturer': matchedKitDetails['manufacturer'] ?? '',
-      'kitDescription': matchedKitDetails['description'] ?? '',
-      'kitQrImageUrl': matchedKitDetails['qrImageUrl'] ?? '',
-      'kitQrImageName': matchedKitDetails['qrImageName'] ?? '',
+      'matchedQrKitId': _cleanString(qrExtraData['matchedQrKitId'], 180),
+      'matchedQrCode': _cleanString(qrExtraData['matchedQrCode'], 160),
+      'matchedKitName': _cleanString(qrExtraData['matchedKitName'], 160),
+      'kitCategory': _cleanString(matchedKitDetails['category'], 120),
+      'kitSampleType': _cleanString(matchedKitDetails['sampleType'], 120),
+      'kitManufacturer': _cleanString(matchedKitDetails['manufacturer'], 160),
+      'kitDescription': _cleanString(matchedKitDetails['description'], 500),
+      'kitQrImageUrl': _cleanString(matchedKitDetails['qrImageUrl'], 750000),
+      'kitQrImageName': _cleanString(matchedKitDetails['qrImageName'], 260),
       'selectedResult': selectedResult,
-      'imageUrl': imageUrl,
-      'imageName': imageName ?? '',
-      'imageStoragePath': imageStoragePath,
+      'imageUrl': _cleanString(imageUrl, 750000),
+      'imageName': _cleanString(imageName, 260),
+      'imageStoragePath': _cleanString(imageStoragePath, 500),
       'reviewStatus': 'Approved',
-      'adminComment': imageUploadError,
+      'adminComment': _cleanString(imageUploadError, 500),
       'reviewedBy': 'Auto Approval',
       'reviewedAt': now,
-      'qrParsedData': qrExtraData,
+      'qrParsedData': _cleanMap(_stripEmbeddedKitImage(qrExtraData)),
       'submittedAt': now,
       'createdAt': now,
       'updatedAt': now,
@@ -151,48 +141,68 @@ class DatabaseService {
     String? qrImageName,
   }) async {
     final normalizedCode = normalizeQrKitCode(qrCode);
-    final cleanKitName = kitName.trim();
+    final cleanKitName = _cleanString(kitName, 160);
     if (normalizedCode.isEmpty || cleanKitName.isEmpty) {
       throw ArgumentError('QR code and kit name are required.');
+    }
+    if (normalizedCode.length > 160) {
+      throw ArgumentError('QR code must be 160 characters or less.');
     }
 
     final docRef = _qrKits.doc(qrKitDocumentId(normalizedCode));
     final existing = await docRef.get();
     final existingData = existing.data() ?? const <String, dynamic>{};
-    var qrImageUrl = (existingData['qrImageUrl'] ?? '').toString();
-    var qrImageStoragePath =
-        (existingData['qrImageStoragePath'] ?? '').toString();
-    final cleanQrImageName = qrImageName?.trim() ?? '';
+    var qrImageUrl = _cleanString(existingData['qrImageUrl'], 1200);
+    var qrImageStoragePath = _cleanString(
+      existingData['qrImageStoragePath'],
+      500,
+    );
+    final cleanQrImageName = _cleanString(qrImageName, 260);
 
     if (qrImageBytes != null && qrImageBytes.isNotEmpty) {
       final safeImageName = _safeImageName(
         cleanQrImageName.isEmpty ? null : cleanQrImageName,
         docRef.id,
       );
-      qrImageStoragePath =
-          'qr_kit_images/${docRef.id}/${DateTime.now().millisecondsSinceEpoch}_$safeImageName';
-      final ref = _storage.ref(qrImageStoragePath);
-      final uploadTask = await ref.putData(
-        qrImageBytes,
-        SettableMetadata(contentType: _contentTypeFor(safeImageName)),
-      );
-      qrImageUrl = await uploadTask.ref.getDownloadURL();
+      if (_cloudinaryService.isConfigured) {
+        try {
+          final upload = await _cloudinaryService.uploadImageBytes(
+            bytes: qrImageBytes,
+            fileName: safeImageName,
+            folder: 'rapid-test/qr-kits',
+          );
+          qrImageUrl = upload.secureUrl;
+          qrImageStoragePath = 'cloudinary:${upload.publicId}';
+        } catch (_) {
+          qrImageStoragePath = '';
+          qrImageUrl =
+              qrImageBytes.length <= _maxEmbeddedReportImageBytes
+                  ? _embeddedReportImageDataUrl(qrImageBytes, safeImageName)
+                  : qrImageUrl;
+        }
+      } else {
+        qrImageStoragePath = '';
+        qrImageUrl =
+            qrImageBytes.length <= _maxEmbeddedReportImageBytes
+                ? _embeddedReportImageDataUrl(qrImageBytes, safeImageName)
+                : qrImageUrl;
+      }
     }
 
     final data = {
       'qrCode': normalizedCode,
       'qrCodeNormalized': normalizedCode,
       'kitName': cleanKitName,
-      'category': category.trim(),
-      'sampleType': sampleType.trim(),
-      'manufacturer': manufacturer.trim(),
-      'description': description.trim(),
-      'qrImageUrl': qrImageUrl,
+      'category': _cleanString(category, 120),
+      'sampleType': _cleanString(sampleType, 120),
+      'manufacturer': _cleanString(manufacturer, 160),
+      'description': _cleanString(description, 500),
+      'qrImageUrl': _cleanString(qrImageUrl, 750000),
       'qrImageName':
           cleanQrImageName.isNotEmpty
               ? cleanQrImageName
-              : (existingData['qrImageName'] ?? '').toString(),
-      'qrImageStoragePath': qrImageStoragePath,
+              : _cleanString(existingData['qrImageName'], 260),
+      'qrImageStoragePath': _cleanString(qrImageStoragePath, 500),
       'isActive': true,
       'updatedAt': FieldValue.serverTimestamp(),
       if (!existing.exists) 'createdAt': FieldValue.serverTimestamp(),
@@ -312,6 +322,65 @@ class DatabaseService {
     final value = trimmed == null || trimmed.isEmpty ? fallback : trimmed;
     final sanitized = value.replaceAll(RegExp(r'[^A-Za-z0-9._-]'), '_');
     return sanitized.isEmpty ? fallback : sanitized;
+  }
+
+  String _embeddedReportImageDataUrl(Uint8List bytes, String imageName) {
+    if (bytes.length > _maxEmbeddedReportImageBytes) {
+      throw StateError(
+        'Optional kit photo was too large to save for free. Result saved without photo.',
+      );
+    }
+    return 'data:${_contentTypeFor(imageName)};base64,${base64Encode(bytes)}';
+  }
+
+  String _cleanString(Object? value, int maxLength) {
+    final cleaned = (value ?? '').toString().trim();
+    if (cleaned.length <= maxLength) return cleaned;
+    return cleaned.substring(0, maxLength);
+  }
+
+  Map<String, dynamic> _stripEmbeddedKitImage(Map<String, dynamic> data) {
+    return data.map((key, value) {
+      if (key == 'matchedKitDetails' && value is Map) {
+        final details = Map<String, dynamic>.from(
+          value.map((k, v) => MapEntry(k.toString(), v)),
+        )..remove('qrImageUrl');
+        return MapEntry(key, details);
+      }
+      return MapEntry(key, value);
+    });
+  }
+
+  Map<String, dynamic> _cleanMap(Map<String, dynamic> data) {
+    return data.map((key, value) {
+      final safeKey = key.toString();
+      if (value is Map) {
+        return MapEntry(
+          safeKey,
+          _cleanMap(value.map((k, v) => MapEntry(k.toString(), v))),
+        );
+      }
+      if (value is Iterable) {
+        return MapEntry(
+          safeKey,
+          value
+              .take(25)
+              .map(
+                (item) =>
+                    item is Map
+                        ? _cleanMap(
+                          item.map((k, v) => MapEntry(k.toString(), v)),
+                        )
+                        : item,
+              )
+              .toList(),
+        );
+      }
+      if (value is String && value.length > 500) {
+        return MapEntry(safeKey, value.substring(0, 500));
+      }
+      return MapEntry(safeKey, value);
+    });
   }
 
   Stream<QuerySnapshot<Map<String, dynamic>>> watchRecords() {
